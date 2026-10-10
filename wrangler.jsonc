@@ -1,0 +1,22 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "data-pemilu",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-10-01",
+    "observability": { "enabled": true },
+    // One database per election. Replace the placeholder ids after `wrangler d1 create` (see README).
+    "d1_databases": [
+        {
+            "binding": "DB_2024",
+            "database_name": "pemilu2024",
+            "database_id": "00000000-0000-0000-0000-000000002024",
+            "migrations_dir": "migrations/2024"
+        },
+        {
+            "binding": "DB_2019",
+            "database_name": "pemilu2019",
+            "database_id": "00000000-0000-0000-0000-000000002019",
+            "migrations_dir": "migrations/2019"
+        }
+    ]
+}

@@ -1,0 +1,8 @@
+node_modules/
+data/
+*.sql.gz
+.wrangler/
+.dev.vars
+dist/
+*.log
+.DS_Store

@@ -1,0 +1,32 @@
+{
+    "name": "data-pemilu",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Read-only API for Indonesian legislative election results (2024 and 2019) on Cloudflare D1.",
+    "scripts": {
+        "dev": "wrangler dev",
+        "test": "vitest run",
+        "check": "biome check",
+        "format": "biome check --write",
+        "typecheck": "tsc --noEmit",
+        "build-sql": "tsx scripts/build-sql.ts",
+        "load-local": "tsx scripts/load-local.ts",
+        "verify": "tsx scripts/verify.ts"
+    },
+    "dependencies": {
+        "hono": "^4.13.13",
+        "zod": "^4.6.5"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^2.5.15",
+        "@cloudflare/vitest-plugin": "^1.4.0",
+        "@cloudflare/workers-types": "^5.20261010.1",
+        "@types/node": "^26.6.5",
+        "csv-parse": "^7.0.3",
+        "tsx": "^4.23.15",
+        "typescript": "^7.0.2",
+        "vitest": "^4.1.0",
+        "wrangler": "^4.149.0"
+    }
+}
