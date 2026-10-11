@@ -4,6 +4,7 @@ import { authenticate } from './http/auth';
 import { cacheResponses } from './http/cache';
 import type { AppEnv } from './http/context';
 import { registerDapilRoutes } from './routes/dapil';
+import { registerWilayahRoutes } from './routes/wilayah';
 
 export const app = new Hono<AppEnv>();
 
@@ -11,6 +12,7 @@ app.get('/healthz', (c) => c.json({ data: { status: 'ok' }, meta: {} }));
 
 app.use('/v1/*', authenticate, cacheResponses);
 registerDapilRoutes(app);
+registerWilayahRoutes(app);
 
 app.notFound((c) => c.json({ error: { code: 'tidak-ditemukan', message: 'Alamat tidak ditemukan.' } }, 404));
 

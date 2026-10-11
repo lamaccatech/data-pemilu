@@ -22,7 +22,13 @@ export default defineConfig(async () => ({
             },
             {
                 // Runs the same app in Node against the local D1 filled by `pnpm load-local`.
-                test: { name: 'data', include: ['test/data/**/*.test.ts'], testTimeout: 60_000 },
+                // One file at a time: each opens the same local SQLite files.
+                test: {
+                    name: 'data',
+                    include: ['test/data/**/*.test.ts'],
+                    testTimeout: 60_000,
+                    fileParallelism: false,
+                },
             },
         ],
     },
