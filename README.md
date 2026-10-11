@@ -85,14 +85,20 @@ Join it to endpoint 2 on `kode_provinsi`; the 2019 dapil rows carry no province 
 digits of a 2019 `dpr_ri` `kode_dapil` are the province.
 
 - 2024 has 38 provinces, 2019 has 34. Papua Selatan, Papua Tengah and Papua Pegunungan were part of Papua in
-  2019, and Papua Barat Daya was part of Papua Barat, so the 2019 file joins them back together.
-- Source: Badan Informasi Geospasial (geoservice.big.go.id), as published in
-  [ardian28/GeoJson-Indonesia-38-Provinsi](https://github.com/ardian28/GeoJson-Indonesia-38-Provinsi) under
-  the MIT licence. `build-geo` downloads it from one pinned commit. That file still gives the new Papua
-  provinces the codes 91 and 92, so codes are assigned by province name from the election data; all 38 names
-  match.
-- About 400 KB per election, coordinates to four decimals (roughly 10 m). For display, not for settling
-  where a border runs.
+  2019, and Papua Barat Daya was part of Papua Barat.
+- Each election uses a map of its own time, downloaded by `build-geo` from one pinned commit:
+  - 2024: Badan Informasi Geospasial (geoservice.big.go.id), as published in
+    [mashadinoor/Indonesia-Geojson-2026](https://github.com/mashadinoor/Indonesia-Geojson-2026), MIT licence.
+  - 2019: Badan Pusat Statistik 2019, published by OCHA on HDX under CC BY-IGO, as copied in
+    [habibrosyad/indonesia-geojson](https://github.com/habibrosyad/indonesia-geojson)
+    (`idn_adm1_bps_2019.json`). That repository states no licence of its own; credit BPS and OCHA where the
+    map is shown.
+- Codes are the Kemendagri codes of the election data, matched by province name; every name in both files
+  matches. This matters for 2019: BPS numbers Papua 94 and Papua Barat 91, Kemendagri 91 and 92.
+- The two maps come from different surveys, so a border that did not change is not drawn identically in
+  both. Show one election at a time.
+- 407 KB for 2024 and 290 KB for 2019, coordinates to four decimals (roughly 10 m). For display, not for
+  settling where a border runs.
 
 ### Classification
 
@@ -207,6 +213,6 @@ Cache API only works on a custom domain; on `*.workers.dev` every request is com
 
 ## Later
 
-Only province boundaries are built. Two more sets are at hand: a kabupaten/kota file in the same BIG-based
-repository, and every kecamatan and kelurahan shape in `~/data/bedah-dapil/geo/` (188 MB), from which dapil
+Only province boundaries are built. Two more sets are at hand: kabupaten/kota outlines in the same two
+repositories (2024 and 2019), and every kecamatan and kelurahan shape in `~/data/bedah-dapil/geo/` (188 MB), from which dapil
 outlines could be made as the union of each dapil's kecamatan.

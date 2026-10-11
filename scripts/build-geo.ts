@@ -1,31 +1,15 @@
 /**
  * Builds province boundaries for both elections: data/geo/<pemilu>/provinsi.geojson.
  *
- * The outlines come from Badan Informasi Geospasial (BIG) by way of a public repository (see SOURCE). That
- * file has the 38 provinces of 2024. The 34 provinces of 2019 are made by joining the provinces created in
- * 2022 back onto the ones they were split from.
+ * Each election gets the provinces as they stood then, from a published source pinned to one commit:
+ * 38 provinces for 2024 and 34 for 2019, before Papua and Papua Barat were divided. Province codes are the
+ * Kemendagri codes of the election data, matched by province name.
  */
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { PEMILU, type Pemilu } from '../src/tingkat';
 import { EXPORT_DIR, GEO_DIR } from './tables';
-
-/** Pinned to one commit, so a rebuild cannot change under us. MIT licence; data from geoservice.big.go.id. */
-const SOURCE = {
-    repository: 'https://github.com/ardian28/GeoJson-Indonesia-38-Provinsi',
-    url: 'https://raw.githubusercontent.com/ardian28/GeoJson-Indonesia-38-Provinsi/486e89ca57c9f9910991dbf00afca26297b3baa3/Provinsi/38%20Provinsi%20Indonesia%20-%20Provinsi.json',
-    file: path.join(GEO_DIR, 'source', 'provinsi-big.geojson'),
-};
-/** 2024 province code -> the 2019 province it was part of. Provinces not listed are unchanged. */
-const PARENT_IN_2019: Record<string, string> = {
-    '93': '91', // Papua Selatan, from Papua
-    '94': '91', // Papua Tengah, from Papua
-    '95': '91', // Papua Pegunungan, from Papua
-    '96': '92', // Papua Barat Daya, from Papua Barat
-};
-const EXPECTED_PROVINCES: Record<Pemilu, number> = { '2024': 38, '2019': 34 };
 
 interface Feature {
     type: 'Feature';
@@ -36,21 +20,70 @@ interface Collection {
     type: 'FeatureCollection';
     features: Feature[];
 }
-
-async function fetchSource(): Promise<Collection> {
-    if (!fs.existsSync(SOURCE.file)) {
-        console.log(`Downloading ${SOURCE.url}`);
-        const response = await fetch(SOURCE.url);
-        if (!response.ok) {
-            throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-        }
-        fs.mkdirSync(path.dirname(SOURCE.file), { recursive: true });
-        fs.writeFileSync(SOURCE.file, Buffer.from(await response.arrayBuffer()));
-    }
-    return JSON.parse(fs.readFileSync(SOURCE.file, 'utf8'));
+interface Source {
+    /** Shown in the README and printed after a build. */
+    credit: string;
+    expectedProvinces: number;
+    /** The property that holds the province name. */
+    nameProperty: string;
+    load(): Promise<Feature[]>;
 }
 
-/** Province names and codes of 2024 as the election data has them: NAMA -> kode. */
+const SOURCE_DIR = path.join(GEO_DIR, 'source');
+const RAW = 'https://raw.githubusercontent.com';
+const REPO_2024 = 'mashadinoor/Indonesia-Geojson-2026';
+const COMMIT_2024 = 'c95911f3f23af6e01c3bf706c80e36a9f3958588';
+const REPO_2019 = 'habibrosyad/indonesia-geojson';
+const COMMIT_2019 = '3236ec94c4e3be484c9888e3efa5e500245d6be9';
+
+/** Downloads once into data/geo/source and reads from there afterwards. */
+async function cached(name: string, url: string): Promise<string> {
+    const file = path.join(SOURCE_DIR, name);
+    if (!fs.existsSync(file)) {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Download failed (${response.status}): ${url}`);
+        }
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+    }
+    return fs.readFileSync(file, 'utf8');
+}
+
+const SOURCES: Record<Pemilu, Source> = {
+    '2024': {
+        credit: `Badan Informasi Geospasial, via github.com/${REPO_2024} (MIT)`,
+        expectedProvinces: 38,
+        nameProperty: 'PROVINSI',
+        // One file per province.
+        async load() {
+            const listing = await cached(
+                '2024/listing.json',
+                `https://api.github.com/repos/${REPO_2024}/contents/Provinsi?ref=${COMMIT_2024}`,
+            );
+            const files: { name: string }[] = JSON.parse(listing);
+            const features: Feature[] = [];
+            for (const { name } of files) {
+                const url = `${RAW}/${REPO_2024}/${COMMIT_2024}/Provinsi/${encodeURIComponent(name)}`;
+                const collection: Collection = JSON.parse(await cached(`2024/${name}`, url));
+                features.push(...collection.features);
+            }
+            return features;
+        },
+    },
+    '2019': {
+        credit: `Badan Pusat Statistik 2019, published by OCHA on HDX (CC BY-IGO), via github.com/${REPO_2019}`,
+        expectedProvinces: 34,
+        nameProperty: 'ADM1_ID',
+        async load() {
+            const url = `${RAW}/${REPO_2019}/${COMMIT_2019}/idn_adm1_bps_2019.json`;
+            const collection: Collection = JSON.parse(await cached('2019/idn_adm1_bps_2019.json', url));
+            return collection.features;
+        },
+    },
+};
+
+/** Province names and codes as the election data has them: NAMA -> kode. */
 function readProvinces(): Map<string, string> {
     const rows: Record<string, string>[] = parse(fs.readFileSync(path.join(EXPORT_DIR, 'dapil.csv')), {
         columns: true,
@@ -64,65 +97,46 @@ function readProvinces(): Map<string, string> {
     return codes;
 }
 
+/** Coordinates to four decimals, about 10 m: all a map needs, and roughly half the bytes. */
+function round(coordinates: unknown): unknown {
+    if (typeof coordinates === 'number') {
+        return Math.round(coordinates * 10_000) / 10_000;
+    }
+    return (coordinates as unknown[]).map(round);
+}
+
 async function main() {
-    const source = await fetchSource();
     const codes = readProvinces();
-    const names = new Map([...codes].map(([name, code]) => [code, name]));
-    // The source still files the new Papua provinces under codes 91 and 92, so codes are taken from the
-    // election data by name. Every name must be found there.
-    const coded: Collection = {
-        type: 'FeatureCollection',
-        features: source.features.map((feature) => {
-            const name = String(feature.properties.PROVINSI).toUpperCase();
+    for (const pemilu of PEMILU) {
+        const source = SOURCES[pemilu];
+        const features = (await source.load()).map((feature): Feature => {
+            // The sources use their own codes (BPS numbers Papua and Papua Barat differently from Kemendagri),
+            // so the code comes from the election data by name. Every name must be found there.
+            const name = String(feature.properties[source.nameProperty]).toUpperCase();
             const code = codes.get(name);
             if (code === undefined || feature.geometry === null) {
-                throw new Error(`Province "${name}" of the boundary file is not in dapil.csv, or has no shape`);
+                throw new Error(`${pemilu}: province "${name}" is not in dapil.csv, or has no shape`);
             }
-            return { ...feature, properties: { kode_2024: code } };
-        }),
-    };
-    const input = path.join(GEO_DIR, 'source', 'provinsi-berkode.geojson');
-    fs.writeFileSync(input, JSON.stringify(coded));
-
-    for (const pemilu of PEMILU) {
-        const target = path.join(GEO_DIR, pemilu, 'provinsi.geojson');
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        const code = pemilu === '2019' ? `(${JSON.stringify(PARENT_IN_2019)})[kode_2024] || kode_2024` : 'kode_2024';
-        // Joins the shapes that share a code; coordinates are kept to about 10 m, which is all a map needs.
-        execFileSync(
-            'pnpm',
-            [
-                'exec',
-                'mapshaper',
-                input,
-                '-each',
-                `kode_provinsi = ${code}`,
-                '-dissolve',
-                'kode_provinsi',
-                '-sort',
-                'kode_provinsi',
-                '-o',
-                'precision=0.0001',
-                target,
-            ],
-            { stdio: 'pipe' },
-        );
-        const collection: Collection = JSON.parse(fs.readFileSync(target, 'utf8'));
-        for (const feature of collection.features) {
-            const kode = String(feature.properties.kode_provinsi);
-            feature.properties = { kode_provinsi: kode, nama_provinsi: names.get(kode) };
-        }
-        if (collection.features.length !== EXPECTED_PROVINCES[pemilu]) {
+            return {
+                type: 'Feature',
+                properties: { kode_provinsi: code, nama_provinsi: name },
+                geometry: { type: feature.geometry.type, coordinates: round(feature.geometry.coordinates) },
+            };
+        });
+        features.sort((a, b) => String(a.properties.kode_provinsi).localeCompare(String(b.properties.kode_provinsi)));
+        const distinct = new Set(features.map((feature) => feature.properties.kode_provinsi)).size;
+        if (features.length !== source.expectedProvinces || distinct !== features.length) {
             throw new Error(
-                `${pemilu}: built ${collection.features.length} provinces, expected ${EXPECTED_PROVINCES[pemilu]}`,
+                `${pemilu}: ${features.length} provinces (${distinct} distinct), expected ${source.expectedProvinces}`,
             );
         }
-        fs.writeFileSync(target, JSON.stringify(collection));
-        console.log(
-            `${pemilu}: ${collection.features.length} provinces, ${(fs.statSync(target).size / 1024).toFixed(0)} KB -> ${path.relative('.', target)}`,
-        );
+        const target = path.join(GEO_DIR, pemilu, 'provinsi.geojson');
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, JSON.stringify({ type: 'FeatureCollection', features }));
+        const size = (fs.statSync(target).size / 1024).toFixed(0);
+        console.log(`${pemilu}: ${features.length} provinces, ${size} KB -> ${path.relative('.', target)}`);
+        console.log(`  source: ${source.credit}`);
     }
-    console.log(`Source: ${SOURCE.repository} (BIG)`);
 }
 
 main().catch((error) => {
