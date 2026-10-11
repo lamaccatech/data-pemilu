@@ -136,7 +136,7 @@ in the same order as endpoint 2 with the same `provinsi`, so the two join on `ko
 ### Classification
 
 - `kuadran`: the margin is the party's votes minus the votes it needed for the seats it holds, divided by its
-  votes. `aman` 10% or more, `waspada` 5% to under 10%, `rawan` under 5%, `kosong` when it holds no seat or
+  votes. The margin in votes is `margin_kursi`. `aman` 10% or more, `waspada` 5% to under 10%, `rawan` under 5%, `kosong` when it holds no seat or
   (for `dpr_ri`) is under the national threshold.
 - `peluang_dekat`: `kekurangan_kursi_berikutnya` is less than half of `harga_kursi_terakhir`. Always false
   for a party under the national threshold, which cannot win a `dpr_ri` seat whatever it gains in one dapil.

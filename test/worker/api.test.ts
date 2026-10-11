@@ -309,6 +309,18 @@ describe('padanan and alias', () => {
 });
 
 describe('persaingan', () => {
+    it('gives the same seat margin in the list of a level as in the contest of a dapil', async () => {
+        const list = await json('/v1/2024/dpr_ri/dapil?partai=pan');
+        const aceh = list.body.data.find((row: { kode_dapil: string }) => row.kode_dapil === '1101');
+        const contest = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
+        const pan = contest.body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'pan');
+        expect(aceh.margin_kursi).toBe(pan.margin_kursi);
+        // No seat, no margin.
+        for (const row of list.body.data) {
+            expect(row.margin_kursi === null).toBe(row.kursi_partai === null || row.kursi_partai === 0);
+        }
+    });
+
     it('calculates every party of a dapil the way the focus party is calculated', async () => {
         const { status, body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
         expect(status).toBe(200);

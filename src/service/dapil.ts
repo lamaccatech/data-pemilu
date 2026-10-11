@@ -7,6 +7,7 @@ import {
     isComputable,
     isNextSeatNear,
     type Kuadran,
+    votesNeededForSeats,
 } from '../calc';
 import type { DapilRecord } from '../db/dapil';
 import { type Election, eligibleParties, type Party } from '../db/election';
@@ -34,6 +35,8 @@ export interface DapilView {
     kekurangan_kursi_berikutnya: number | null;
     suara_caleg_batas: number | null;
     kuadran: Kuadran | null;
+    /** Votes above what the seats it holds needed: what it could lose before a seat goes. Null without a seat. */
+    margin_kursi: number | null;
     peluang_dekat: boolean | null;
 }
 
@@ -87,12 +90,18 @@ export function viewDapil(
                 kekurangan_kursi_berikutnya: null,
                 suara_caleg_batas: null,
                 kuadran: null,
+                margin_kursi: null,
                 peluang_dekat: null,
             },
             analysis: null,
         };
     }
     const own = analysis.partai_sendiri;
+    const counted = countedVotes(votesByParty, eligible);
+    const needed =
+        own.kursi > 0 && own.lolos_ambang_batas
+            ? votesNeededForSeats(counted, analysis.jumlah_kursi, own.partai_id, own.kursi)
+            : null;
     return {
         view: {
             ...place,
@@ -107,7 +116,8 @@ export function viewDapil(
             target_suara_kursi_berikutnya: own.target_suara_kursi_berikutnya,
             kekurangan_kursi_berikutnya: own.kekurangan_kursi_berikutnya,
             suara_caleg_batas: own.suara_caleg_batas,
-            kuadran: classifyKuadran(countedVotes(votesByParty, eligible), analysis.jumlah_kursi, own),
+            kuadran: classifyKuadran(counted, analysis.jumlah_kursi, own),
+            margin_kursi: needed === null ? null : own.suara - needed,
             peluang_dekat: isNextSeatNear(own, analysis.harga_kursi_terakhir),
         },
         analysis,
