@@ -1,17 +1,23 @@
 /**
- * Builds province boundaries for both elections from the kecamatan shapes: data/geo/<pemilu>/provinsi.geojson.
+ * Builds province boundaries for both elections: data/geo/<pemilu>/provinsi.geojson.
  *
- * A province is the union of its kecamatan (the first two digits of the kecamatan code). The shapes use the
- * 2024 codes, so the 34 provinces of 2019 are made by putting the provinces created in 2022 back into the
- * ones they were split from.
+ * The outlines come from Badan Informasi Geospasial (BIG) by way of a public repository (see SOURCE). That
+ * file has the 38 provinces of 2024. The 34 provinces of 2019 are made by joining the provinces created in
+ * 2022 back onto the ones they were split from.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { PEMILU, type Pemilu } from '../src/tingkat';
-import { EXPORT_DIR, GEO_DIR, GEO_SOURCE_DIR } from './tables';
+import { EXPORT_DIR, GEO_DIR } from './tables';
 
+/** Pinned to one commit, so a rebuild cannot change under us. MIT licence; data from geoservice.big.go.id. */
+const SOURCE = {
+    repository: 'https://github.com/ardian28/GeoJson-Indonesia-38-Provinsi',
+    url: 'https://raw.githubusercontent.com/ardian28/GeoJson-Indonesia-38-Provinsi/486e89ca57c9f9910991dbf00afca26297b3baa3/Provinsi/38%20Provinsi%20Indonesia%20-%20Provinsi.json',
+    file: path.join(GEO_DIR, 'source', 'provinsi-big.geojson'),
+};
 /** 2024 province code -> the 2019 province it was part of. Provinces not listed are unchanged. */
 const PARENT_IN_2019: Record<string, string> = {
     '93': '91', // Papua Selatan, from Papua
@@ -20,61 +26,79 @@ const PARENT_IN_2019: Record<string, string> = {
     '96': '92', // Papua Barat Daya, from Papua Barat
 };
 const EXPECTED_PROVINCES: Record<Pemilu, number> = { '2024': 38, '2019': 34 };
-/** Overseas polling places are filed under a pseudo-province and have no shape. */
-const OVERSEAS_PREFIX = '99';
 
 interface Feature {
     type: 'Feature';
     properties: Record<string, unknown>;
     geometry: { type: string; coordinates: unknown } | null;
 }
-
-const provinceIn = (pemilu: Pemilu, code: string) => (pemilu === '2019' ? (PARENT_IN_2019[code] ?? code) : code);
-
-function readCsv(file: string): Record<string, string>[] {
-    return parse(fs.readFileSync(path.join(EXPORT_DIR, file)), { columns: true, bom: true });
+interface Collection {
+    type: 'FeatureCollection';
+    features: Feature[];
 }
 
-function main() {
-    const source = path.join(GEO_SOURCE_DIR, 'kecamatan.geojson');
-    const names = new Map<string, string>();
-    for (const row of readCsv('dapil.csv')) {
+async function fetchSource(): Promise<Collection> {
+    if (!fs.existsSync(SOURCE.file)) {
+        console.log(`Downloading ${SOURCE.url}`);
+        const response = await fetch(SOURCE.url);
+        if (!response.ok) {
+            throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+        }
+        fs.mkdirSync(path.dirname(SOURCE.file), { recursive: true });
+        fs.writeFileSync(SOURCE.file, Buffer.from(await response.arrayBuffer()));
+    }
+    return JSON.parse(fs.readFileSync(SOURCE.file, 'utf8'));
+}
+
+/** Province names and codes of 2024 as the election data has them: NAMA -> kode. */
+function readProvinces(): Map<string, string> {
+    const rows: Record<string, string>[] = parse(fs.readFileSync(path.join(EXPORT_DIR, 'dapil.csv')), {
+        columns: true,
+    });
+    const codes = new Map<string, string>();
+    for (const row of rows) {
         if (row.pemilu === '2024' && row.kode_provinsi && row.nama_provinsi) {
-            names.set(row.kode_provinsi, row.nama_provinsi);
+            codes.set(row.nama_provinsi, row.kode_provinsi);
         }
     }
-    // Kecamatan that belong to a dapil but have no shape leave the province outline short of them.
-    const shapes: { features: Feature[] } = JSON.parse(fs.readFileSync(source, 'utf8'));
-    const withShape = new Set(shapes.features.map((feature) => String(feature.properties.code)));
-    const kecamatan = new Set(readCsv('dapil_kecamatan_2024.csv').map((row) => row.kode_kecamatan ?? ''));
-    const missing = [...kecamatan].filter((code) => !withShape.has(code) && !code.startsWith(OVERSEAS_PREFIX));
+    return codes;
+}
+
+async function main() {
+    const source = await fetchSource();
+    const codes = readProvinces();
+    const names = new Map([...codes].map(([name, code]) => [code, name]));
+    // The source still files the new Papua provinces under codes 91 and 92, so codes are taken from the
+    // election data by name. Every name must be found there.
+    const coded: Collection = {
+        type: 'FeatureCollection',
+        features: source.features.map((feature) => {
+            const name = String(feature.properties.PROVINSI).toUpperCase();
+            const code = codes.get(name);
+            if (code === undefined || feature.geometry === null) {
+                throw new Error(`Province "${name}" of the boundary file is not in dapil.csv, or has no shape`);
+            }
+            return { ...feature, properties: { kode_2024: code } };
+        }),
+    };
+    const input = path.join(GEO_DIR, 'source', 'provinsi-berkode.geojson');
+    fs.writeFileSync(input, JSON.stringify(coded));
 
     for (const pemilu of PEMILU) {
         const target = path.join(GEO_DIR, pemilu, 'provinsi.geojson');
         fs.mkdirSync(path.dirname(target), { recursive: true });
-        const parent = pemilu === '2019' ? `(${JSON.stringify(PARENT_IN_2019)})[code.slice(0, 2)] || ` : '';
-        // Gaps between kecamatan shapes are closed before and after the union; outlines are thinned to what a
-        // country-wide map needs, and specks under 3 km2 are dropped.
+        const code = pemilu === '2019' ? `(${JSON.stringify(PARENT_IN_2019)})[kode_2024] || kode_2024` : 'kode_2024';
+        // Joins the shapes that share a code; coordinates are kept to about 10 m, which is all a map needs.
         execFileSync(
             'pnpm',
             [
                 'exec',
                 'mapshaper',
-                source,
+                input,
                 '-each',
-                `kode_provinsi = ${parent}code.slice(0, 2)`,
-                '-clean',
-                'gap-fill-area=20000km2',
+                `kode_provinsi = ${code}`,
                 '-dissolve',
                 'kode_provinsi',
-                '-simplify',
-                '12%',
-                'weighted',
-                'keep-shapes',
-                '-clean',
-                'gap-fill-area=20000km2',
-                '-filter-islands',
-                'min-area=3km2',
                 '-sort',
                 'kode_provinsi',
                 '-o',
@@ -83,18 +107,10 @@ function main() {
             ],
             { stdio: 'pipe' },
         );
-        const collection: { type: string; features: Feature[] } = JSON.parse(fs.readFileSync(target, 'utf8'));
+        const collection: Collection = JSON.parse(fs.readFileSync(target, 'utf8'));
         for (const feature of collection.features) {
-            const code = String(feature.properties.kode_provinsi);
-            const name = names.get(code);
-            if (name === undefined) {
-                throw new Error(`${pemilu}: province ${code} has shapes but no name in dapil.csv`);
-            }
-            feature.properties = {
-                kode_provinsi: code,
-                nama_provinsi: name,
-                kecamatan_tanpa_batas: missing.filter((kode) => provinceIn(pemilu, kode.slice(0, 2)) === code).length,
-            };
+            const kode = String(feature.properties.kode_provinsi);
+            feature.properties = { kode_provinsi: kode, nama_provinsi: names.get(kode) };
         }
         if (collection.features.length !== EXPECTED_PROVINCES[pemilu]) {
             throw new Error(
@@ -102,17 +118,14 @@ function main() {
             );
         }
         fs.writeFileSync(target, JSON.stringify(collection));
-        const incomplete = collection.features.filter(
-            (feature) => Number(feature.properties.kecamatan_tanpa_batas) > 0,
-        );
         console.log(
             `${pemilu}: ${collection.features.length} provinces, ${(fs.statSync(target).size / 1024).toFixed(0)} KB -> ${path.relative('.', target)}`,
         );
-        for (const feature of incomplete) {
-            const { kode_provinsi, nama_provinsi, kecamatan_tanpa_batas } = feature.properties;
-            console.log(`  ${kode_provinsi} ${nama_provinsi}: ${kecamatan_tanpa_batas} kecamatan without a shape`);
-        }
     }
+    console.log(`Source: ${SOURCE.repository} (BIG)`);
 }
 
-main();
+main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+});

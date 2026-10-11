@@ -3,8 +3,7 @@ import path from 'node:path';
 
 export const EXPORT_DIR = process.env.PEMILU_EXPORT_DIR ?? path.join(os.homedir(), 'data/bedah-dapil/export');
 export const SQL_DIR = path.resolve('data/sql');
-/** Boundary files as supplied, and the files build-geo makes from them (ignored by git). */
-export const GEO_SOURCE_DIR = process.env.PEMILU_GEO_DIR ?? path.join(os.homedir(), 'data/bedah-dapil/geo');
+/** Boundary files made by build-geo (ignored by git). */
 export const GEO_DIR = path.resolve('data/geo');
 /** R2 bucket for the built boundary files. Objects are named <pemilu>/<wilayah>.geojson. */
 export const GEO_BUCKET = 'data-pemilu-batas';

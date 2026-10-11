@@ -7,7 +7,7 @@ const collection = {
     features: [
         {
             type: 'Feature',
-            properties: { kode_provinsi: '11', nama_provinsi: 'ACEH', kecamatan_tanpa_batas: 0 },
+            properties: { kode_provinsi: '11', nama_provinsi: 'ACEH' },
             geometry: {
                 type: 'Polygon',
                 coordinates: [

@@ -9,9 +9,9 @@ different party, so nothing here assumes a particular party: every endpoint take
   Nothing derived is stored. `src/calc/` is a port of `reference/reference_calc.py` and must reproduce
   `reference/fixtures.json`.
 - Boundary files sit in one R2 bucket, `data-pemilu-batas` (binding `GEO`).
-- Election data and boundary files are never committed. They are read from `~/data/bedah-dapil/export/` and
-  `~/data/bedah-dapil/geo/` (override with `PEMILU_EXPORT_DIR` and `PEMILU_GEO_DIR`), and everything
-  generated goes to `data/`, which git ignores.
+- Election data and boundary files are never committed. Election data is read from
+  `~/data/bedah-dapil/export/` (override with `PEMILU_EXPORT_DIR`), and everything downloaded or generated
+  goes to `data/`, which git ignores.
 
 ## Run it locally
 
@@ -20,7 +20,7 @@ Requirements: Node 22 or newer and pnpm.
 ```sh
 pnpm install
 pnpm build-sql      # CSV -> data/sql/<database>/<table>-NNNN.sql, about 50 s
-pnpm build-geo      # kecamatan shapes -> data/geo/<pemilu>/provinsi.geojson, about 10 s
+pnpm build-geo      # downloads the province outlines once -> data/geo/<pemilu>/provinsi.geojson
 pnpm load-local     # migrations and SQL files into the local D1, boundary files into the local R2, about 90 s
 pnpm verify         # row counts, threshold lists, the ACEH I example, database sizes
 echo 'API_KEYS={"kunci-lokal":"lokal"}' > .dev.vars
@@ -80,16 +80,19 @@ Error codes: `tidak-berwenang` (401), `parameter-tidak-valid` (400, also for unk
 
 ### Boundaries
 
-`data` of endpoint 11 goes straight into a map source. Each feature has `kode_provinsi`, `nama_provinsi` and
-`kecamatan_tanpa_batas`. Join it to endpoint 2 on `kode_provinsi`; the 2019 dapil rows carry no province
-code, but the first two digits of a 2019 `dpr_ri` `kode_dapil` are the province.
+`data` of endpoint 11 goes straight into a map source. Each feature has `kode_provinsi` and `nama_provinsi`.
+Join it to endpoint 2 on `kode_provinsi`; the 2019 dapil rows carry no province code, but the first two
+digits of a 2019 `dpr_ri` `kode_dapil` are the province.
 
 - 2024 has 38 provinces, 2019 has 34. Papua Selatan, Papua Tengah and Papua Pegunungan were part of Papua in
-  2019, and Papua Barat Daya was part of Papua Barat.
-- A province is the union of its kecamatan shapes, with outlines thinned for a country-wide map (about
-  250 KB per election) and islands under 3 km2 dropped. They are for display, not for measuring.
-- `kecamatan_tanpa_batas` counts kecamatan that have no shape, so the outline may fall short there:
-  24 in Papua Barat Daya, 7 in Sulawesi Selatan, 1 each in Sulawesi Utara and Papua Tengah.
+  2019, and Papua Barat Daya was part of Papua Barat, so the 2019 file joins them back together.
+- Source: Badan Informasi Geospasial (geoservice.big.go.id), as published in
+  [ardian28/GeoJson-Indonesia-38-Provinsi](https://github.com/ardian28/GeoJson-Indonesia-38-Provinsi) under
+  the MIT licence. `build-geo` downloads it from one pinned commit. That file still gives the new Papua
+  provinces the codes 91 and 92, so codes are assigned by province name from the election data; all 38 names
+  match.
+- About 400 KB per election, coordinates to four decimals (roughly 10 m). For display, not for settling
+  where a border runs.
 
 ### Classification
 
@@ -204,6 +207,6 @@ Cache API only works on a custom domain; on `*.workers.dev` every request is com
 
 ## Later
 
-Only province boundaries are built. The supplied files also hold every kecamatan and kelurahan shape
-(`~/data/bedah-dapil/geo/`, 188 MB), which could feed three more layers in the same bucket: dapil outlines
-(the union of each dapil's kecamatan), the kecamatan of one dapil, and the kelurahan of one kecamatan.
+Only province boundaries are built. Two more sets are at hand: a kabupaten/kota file in the same BIG-based
+repository, and every kecamatan and kelurahan shape in `~/data/bedah-dapil/geo/` (188 MB), from which dapil
+outlines could be made as the union of each dapil's kecamatan.
