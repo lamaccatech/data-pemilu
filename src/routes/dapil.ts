@@ -6,7 +6,7 @@ import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, electionOf, fields, optionalParty, parseParams } from '../http/params';
 import { type DapilView, groupByDapil, summariseViews, viewDapil, votesMap } from '../service/dapil';
-import { type Before, resultsByCode, viewCompetition } from '../service/persaingan';
+import { type Earlier, earlierOf, viewCompetition } from '../service/persaingan';
 import { TINGKAT, TINGKAT_NAMES, type Tingkat } from '../tingkat';
 
 /**
@@ -36,15 +36,10 @@ async function votesIn2019ByName(
 }
 
 /**
- * Every party's votes and seats in the comparable 2019 dapil, by `kode_partai`. Null when the 2024 dapil has
- * none. Party codes, unlike ballot numbers, are the same in both elections.
+ * The comparable 2019 dapil, calculated the same way, for setting beside a 2024 one. Null when the 2024 dapil
+ * has none or it cannot be calculated. Party codes, unlike ballot numbers, are the same in both elections.
  */
-async function resultsIn2019(
-    env: AppEnv['Bindings'],
-    db: D1Database,
-    tingkat: Tingkat,
-    kodeDapil: number,
-): Promise<{ kode_dapil_2019: string; nama_dapil_2019: string; results: Map<string, Before> } | null> {
+async function earlierDapil(env: AppEnv['Bindings'], db: D1Database, tingkat: Tingkat, kodeDapil: number) {
     const { padanan } = await readPadanan(db, tingkat, kodeDapil);
     if (padanan === null || padanan.sebanding !== 1) {
         return null;
@@ -57,10 +52,22 @@ async function resultsIn2019(
     if (before.dapil === null) {
         return null;
     }
+    const votes = votesMap(before.votes);
+    const competition = viewCompetition(election2019, tingkat, before.dapil, votes, before.candidates, null);
+    if (competition === null) {
+        return null;
+    }
+    const lastWinning = competition.pembagian_kursi.kursi_terakhir;
+    const earlier: Earlier = earlierOf(competition, before.candidates);
     return {
-        kode_dapil_2019: String(padanan.kode_dapil_2019),
-        nama_dapil_2019: padanan.nama_dapil_2019,
-        results: resultsByCode(election2019, tingkat, before.dapil.jumlah_kursi, votesMap(before.votes)),
+        earlier,
+        padanan: {
+            kode_dapil_2019: String(padanan.kode_dapil_2019),
+            nama_dapil_2019: padanan.nama_dapil_2019,
+            jumlah_kursi: before.dapil.jumlah_kursi,
+            total_suara_sah: before.votes.reduce((sum, row) => sum + row.suara, 0),
+            harga_kursi_terakhir: lastWinning === null ? null : Math.ceil(lastWinning.suara / lastWinning.pembagi),
+        },
     };
 }
 
@@ -235,7 +242,7 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
         // Only a 2024 dapil has an earlier election to compare with.
         const [{ dapil, votes, candidates }, before] = await Promise.all([
             readDapil(db, tingkat, kode_dapil),
-            pemilu === '2024' ? resultsIn2019(c.env, db, tingkat, kode_dapil) : null,
+            pemilu === '2024' ? earlierDapil(c.env, db, tingkat, kode_dapil) : null,
         ]);
         if (dapil === null) {
             throw dapilNotFound(tingkat, kode_dapil, pemilu);
@@ -247,7 +254,7 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
             dapil,
             votesByParty,
             candidates,
-            before?.results ?? null,
+            before?.earlier ?? null,
         );
         const lastWinning = competition?.pembagian_kursi.kursi_terakhir ?? null;
         const data = {
@@ -257,10 +264,7 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
             total_suara_sah: competition === null ? null : votes.reduce((sum, row) => sum + row.suara, 0),
             data_lengkap: competition !== null,
             harga_kursi_terakhir: lastWinning === null ? null : Math.ceil(lastWinning.suara / lastWinning.pembagi),
-            padanan_2019:
-                before === null
-                    ? null
-                    : { kode_dapil_2019: before.kode_dapil_2019, nama_dapil_2019: before.nama_dapil_2019 },
+            padanan_2019: before?.padanan ?? null,
             partai: competition?.partai ?? [],
             pembagian_kursi: competition?.pembagian_kursi ?? null,
             penantang_terdekat: competition?.penantang_terdekat ?? null,

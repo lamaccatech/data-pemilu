@@ -4,6 +4,9 @@ import { ApiError, notFound } from '../errors';
 import { PEMILU, type Pemilu, TINGKAT_NAMES, type Tingkat } from '../tingkat';
 import type { AppContext } from './context';
 
+/** The same name the response cache keys on; see `http/cache.ts`. */
+export const CALLER_VERSION_PARAMETER = '__versi';
+
 const digits = (pattern: RegExp, message: string) => z.string().regex(pattern, message).transform(Number);
 
 export const fields = {
@@ -20,7 +23,10 @@ export const fields = {
 /** Validates path and query parameters together. Unknown query parameters are refused, so typos are not ignored. */
 export function parseParams<Shape extends z.ZodRawShape>(c: AppContext, shape: Shape): z.infer<z.ZodObject<Shape>> {
     const { pemilu: _pemilu, ...path } = c.req.param() as Record<string, string>;
-    const result = z.strictObject(shape).safeParse({ ...c.req.query(), ...path });
+    // A caller may send its own version marker so that its HTTP cache stops giving out an answer of an older
+    // shape. It names nothing to look up, so it is dropped here.
+    const { [CALLER_VERSION_PARAMETER]: _version, ...query } = c.req.query();
+    const result = z.strictObject(shape).safeParse({ ...query, ...path });
     if (result.success) {
         return result.data as z.infer<z.ZodObject<Shape>>;
     }

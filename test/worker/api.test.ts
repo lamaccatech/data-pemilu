@@ -75,6 +75,13 @@ describe('routing and validation', () => {
         expect(body.error.message.length).toBeGreaterThan(0);
     });
 
+    it('accepts a version marker from the caller and still refuses other unknown parameters', async () => {
+        const marked = await json('/v1/2024/partai?__versi=7');
+        expect(marked.status).toBe(200);
+        expect(marked.body.data).toHaveLength(24);
+        expect((await json('/v1/2024/partai?versi=7')).status).toBe(400);
+    });
+
     it('names the faulty parameter in Indonesian', async () => {
         const { body } = await json('/v1/2024/dprd_provinsi/dapil?prov=11');
         expect(body.error.message).toContain('partai wajib diisi');
@@ -359,11 +366,34 @@ describe('persaingan', () => {
     it('sets the 2019 result of the same party beside it when the dapil is comparable', async () => {
         const before = fixture(2019, 'dpr_ri');
         const { body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
-        expect(body.data.padanan_2019).toEqual({ kode_dapil_2019: '1101', nama_dapil_2019: 'ACEH I' });
+        expect(body.data.padanan_2019).toEqual({
+            kode_dapil_2019: '1101',
+            nama_dapil_2019: 'ACEH I',
+            jumlah_kursi: before.jumlah_kursi,
+            total_suara_sah: before.total_suara_sah,
+            harga_kursi_terakhir: before.harga_kursi_terakhir,
+        });
         const pan = body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'pan');
         expect(pan.hasil_2019).toMatchObject({
             suara: before.partai_sendiri?.suara,
             kursi: before.partai_sendiri?.kursi,
+        });
+        // The 2019 side is calculated the same way, so it agrees with asking 2019 directly.
+        const earlier = await json('/v1/2019/dpr_ri/dapil/1101/persaingan');
+        const panThen = earlier.body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'pan');
+        expect(pan.hasil_2019).toEqual({
+            suara: panThen.suara,
+            persen_suara: panThen.persen_suara,
+            kursi: panThen.kursi,
+            peringkat: panThen.peringkat,
+            persen_suara_gambar: panThen.persen_suara_gambar,
+            caleg_terpilih: panThen.caleg_terpilih.map(
+                ({ nomor_urut, nama, suara }: { nomor_urut: number; nama: string; suara: number }) => ({
+                    nomor_urut,
+                    nama,
+                    suara,
+                }),
+            ),
         });
         // Gelora did not exist in 2019.
         const gelora = body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'gelora');
@@ -383,5 +413,38 @@ describe('persaingan', () => {
     it('refuses a party parameter and an unknown dapil', async () => {
         expect((await json('/v1/2024/dpr_ri/dapil/1101/persaingan?partai=pan')).status).toBe(400);
         expect((await json('/v1/2024/dpr_ri/dapil/999999/persaingan')).body.error.code).toBe('dapil-tidak-ditemukan');
+    });
+
+    it('ranks the parties by votes and sets each seat holder against the same name in 2019', async () => {
+        const { body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
+        expect(body.data.partai.map((row: { peringkat: number }) => row.peringkat)).toEqual(
+            body.data.partai.map((_: unknown, index: number) => index + 1),
+        );
+        const earlier = fixtures.dapil.find(
+            ({ expected }) =>
+                expected.pemilu === 2019 && expected.tingkat === 'dpr_ri' && String(expected.kode_dapil) === '1101',
+        );
+        const then = new Map<string, { suara: number; terpilih: boolean }>();
+        for (const row of earlier?.input.caleg ?? []) {
+            const name = normalizePersonName(row.nama);
+            const known = then.get(name);
+            if (known === undefined || Number(row.suara) > known.suara) {
+                then.set(name, { suara: Number(row.suara), terpilih: Number(row.kursi_ke) > 0 });
+            }
+        }
+        let holders = 0;
+        for (const party of body.data.partai) {
+            for (const holder of party.caleg_terpilih) {
+                holders++;
+                const match = then.get(normalizePersonName(holder.nama));
+                expect(holder.suara_2019).toBe(match?.suara ?? null);
+                expect(holder.terpilih_2019).toBe(match?.terpilih ?? false);
+            }
+        }
+        expect(holders).toBeGreaterThan(0);
+        // 2019 itself has nothing earlier to be set against.
+        const before = await json('/v1/2019/dpr_ri/dapil/1101/persaingan');
+        const seated = before.body.data.partai.flatMap((row: { caleg_terpilih: unknown[] }) => row.caleg_terpilih);
+        expect(seated.every((row: { terpilih_2019: unknown }) => row.terpilih_2019 === null)).toBe(true);
     });
 });

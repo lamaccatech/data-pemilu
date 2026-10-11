@@ -1,12 +1,13 @@
 import type { MiddlewareHandler } from 'hono';
 import { type AppEnv, CACHE_CONTROL } from './context';
+import { CALLER_VERSION_PARAMETER } from './params';
 
 /**
  * Part of every cache key. Raise it whenever the shape or the figures of an answer change, so that answers
  * cached before the change are no longer given out.
  */
-const RESPONSE_VERSION = '2';
-const VERSION_PARAMETER = '__versi';
+const RESPONSE_VERSION = '3';
+const VERSION_PARAMETER = CALLER_VERSION_PARAMETER;
 
 /**
  * Keeps successful answers in the Cache API, keyed by the full URL and the response version. Runs after authentication, so a cached
