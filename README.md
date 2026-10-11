@@ -86,6 +86,7 @@ returned as strings.
 | 19 | `GET /v1/2024/dpt/nasional` | The same figures for the whole country |
 | 20 | `GET /v1/2024/dpt/provinsi` | Each province's total and how many are under 30 |
 | 21 | `GET /v1/2024/:tingkat/provinsi/:kode/dpt` | Each dapil of a province: total and how many are under 30. A kelurahan that votes in another dapil is left out |
+| 22 | `GET /v1/:pemilu/:tingkat/kekuatan?partai=&provinsi=` | One party's votes split into `suara_gambar` and `suara_caleg`, over the dapil where candidate votes are known and do not exceed the party's votes. For 2024, `pemukiman` splits the same votes into `kota` and `kabupaten`: a kota is a kabupaten code whose last two digits are 71 or higher. A dapil wholly in one kind keeps its full votes; a mixed dapil is split by kelurahan, and the rest is `belum_terpetakan`. 2019 has `pemukiman: null`. A 2019 province filter works for `dpr_ri` only |
 
 Answers may be kept by the caller's HTTP cache for a day. A caller that needs a changed answer sooner adds
 `__versi=<anything>` to its requests and changes the value: the parameter is accepted on every endpoint and

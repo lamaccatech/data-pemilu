@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import { countedVotes, findStandouts, normalizePersonName, rankQuotients, round2 } from '../calc';
 import { readAliases, readDapil, readDapilList, readDapilVotes, readPadanan, readPadananList } from '../db/dapil';
 import { eligibleParties, loadElection, partyCode, requireParty } from '../db/election';
+import { readSettlementSplit, readVoteSplit } from '../db/kekuatan';
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, electionOf, fields, optionalParty, parseParams } from '../http/params';
@@ -158,6 +159,42 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
             jumlah_dapil: data.length,
             dapil_tanpa_data: data.filter((row) => !row.data_lengkap).length,
         });
+    });
+
+    // 22. One party's votes split into symbol and candidates, and for 2024 into kota and kabupaten.
+    app.get('/v1/:pemilu/:tingkat/kekuatan', async (c) => {
+        const { pemilu, election, db } = await electionOf(c);
+        const { tingkat, partai, provinsi } = parseParams(c, {
+            tingkat: fields.tingkat,
+            partai: fields.partai,
+            provinsi: fields.provinsi.optional(),
+        });
+        if (pemilu === '2019' && provinsi !== undefined && tingkat !== 'dpr_ri') {
+            throw notFound(
+                'tidak-tersedia',
+                'Hasil Pemilu 2019 pada tingkat ini tidak membawa kode provinsi, sehingga susunan suara per provinsi hanya tersedia untuk DPR RI dan untuk Pemilu 2024.',
+            );
+        }
+        const party = requireParty(election, partai);
+        const scope =
+            provinsi === undefined
+                ? null
+                : { match: pemilu === '2024' ? ('column' as const) : ('prefix' as const), code: provinsi };
+        const [split, settlement] = await Promise.all([
+            readVoteSplit(db, tingkat, party.partai_id, scope),
+            pemilu === '2024' ? readSettlementSplit(db, tingkat, party.partai_id, scope) : null,
+        ]);
+        return ok(
+            c,
+            {
+                dapil_tanpa_pecahan: split.dapil_tanpa_pecahan,
+                pemukiman: settlement,
+                suara_caleg: split.suara_terbagi > 0 ? split.suara_caleg : null,
+                suara_gambar: split.suara_terbagi > 0 ? split.suara_gambar : null,
+                suara_terbagi: split.suara_terbagi,
+            },
+            { pemilu, tingkat, partai, provinsi: provinsi ?? null },
+        );
     });
 
     // 3. One dapil: every party's votes and seats, and the quotients around the last seat.

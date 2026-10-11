@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import fixtures from '../../reference/fixtures.json';
 import { normalizePersonName } from '../../src/calc';
@@ -486,5 +487,187 @@ describe('persaingan of a whole level', () => {
         expect((await json('/v1/2024/dpr_ri/persaingan?partai=pan')).status).toBe(400);
         expect((await json('/v1/2019/dpr_ri/persaingan?provinsi=11')).body.error.code).toBe('tidak-tersedia');
         expect((await json('/v1/2019/dpr_ri/persaingan')).status).toBe(200);
+    });
+});
+
+describe('susunan suara', () => {
+    it('splits symbol and candidates, and leaves a 2024 area without kecamatan unmapped', async () => {
+        const { status, body } = await json('/v1/2024/dpr_ri/kekuatan?partai=pan');
+        expect(status).toBe(200);
+        expect(body.data.suara_gambar + body.data.suara_caleg).toBe(body.data.suara_terbagi);
+        expect(
+            body.data.pemukiman.kota + body.data.pemukiman.kabupaten + body.data.pemukiman.belum_terpetakan,
+        ).toBeGreaterThan(0);
+        const list = await json('/v1/2024/dpr_ri/dapil?partai=pan');
+        const votes = list.body.data.reduce(
+            (sum: number, row: { suara_partai: number | null }) => sum + (row.suara_partai ?? 0),
+            0,
+        );
+        expect(body.data.pemukiman).toEqual({ kota: 0, kabupaten: 0, belum_terpetakan: votes });
+    });
+
+    it('keeps a pure dapil whole and splits a mixed one only when kelurahan do not exceed it', async () => {
+        const party = await env.DB_2024.prepare("SELECT partai_id AS id FROM partai WHERE kode_partai = 'pan'").first<{
+            id: number;
+        }>();
+        const partyId = party?.id;
+        if (partyId === undefined) {
+            throw new Error('pan is not seeded');
+        }
+        const db = env.DB_2024;
+        const insert = [
+            db
+                .prepare(
+                    'INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, kode_kabupaten, jumlah_kursi, total_suara_sah) VALUES (1, ?, ?, 98, NULL, 1, ?)',
+                )
+                .bind(9901, 'UJI KOTA', 100),
+            db
+                .prepare(
+                    'INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, jumlah_kursi, total_suara_sah) VALUES (1, 9902, ?, 98, 1, 200)',
+                )
+                .bind('UJI KAB'),
+            db
+                .prepare(
+                    'INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, jumlah_kursi, total_suara_sah) VALUES (1, 9903, ?, 98, 1, 300)',
+                )
+                .bind('UJI CAMPUR'),
+            db
+                .prepare(
+                    'INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, jumlah_kursi, total_suara_sah) VALUES (1, 9904, ?, 98, 1, 100)',
+                )
+                .bind('UJI LEBIH'),
+            db
+                .prepare(
+                    "INSERT INTO suara_partai (tingkat, kode_dapil, partai_id, suara, sumber) VALUES (1, 9901, ?, 100, 'uji')",
+                )
+                .bind(partyId),
+            db
+                .prepare(
+                    "INSERT INTO suara_partai (tingkat, kode_dapil, partai_id, suara, sumber) VALUES (1, 9902, ?, 200, 'uji')",
+                )
+                .bind(partyId),
+            db
+                .prepare(
+                    "INSERT INTO suara_partai (tingkat, kode_dapil, partai_id, suara, sumber) VALUES (1, 9903, ?, 300, 'uji')",
+                )
+                .bind(partyId),
+            db
+                .prepare(
+                    "INSERT INTO suara_partai (tingkat, kode_dapil, partai_id, suara, sumber) VALUES (1, 9904, ?, 100, 'uji')",
+                )
+                .bind(partyId),
+            db
+                .prepare(
+                    "INSERT INTO caleg (tingkat, kode_dapil, partai_id, nomor_urut, nama, suara, kursi_ke) VALUES (1, 9901, ?, 1, 'UJI', 30, 0)",
+                )
+                .bind(partyId),
+            db.prepare(
+                "INSERT INTO dapil_kecamatan (tingkat, kode_dapil, kode_kecamatan, nama_kecamatan) VALUES (1, 9901, '987101', 'KOTA')",
+            ),
+            db.prepare(
+                "INSERT INTO dapil_kecamatan (tingkat, kode_dapil, kode_kecamatan, nama_kecamatan) VALUES (1, 9902, '980101', 'KAB')",
+            ),
+            db.prepare(
+                "INSERT INTO dapil_kecamatan (tingkat, kode_dapil, kode_kecamatan, nama_kecamatan) VALUES (1, 9903, '987102', 'KOTA')",
+            ),
+            db.prepare(
+                "INSERT INTO dapil_kecamatan (tingkat, kode_dapil, kode_kecamatan, nama_kecamatan) VALUES (1, 9903, '980102', 'KAB')",
+            ),
+            db.prepare(
+                "INSERT INTO dapil_kecamatan (tingkat, kode_dapil, kode_kecamatan, nama_kecamatan) VALUES (1, 9904, '987103', 'KOTA')",
+            ),
+            db.prepare(
+                "INSERT INTO dapil_kecamatan (tingkat, kode_dapil, kode_kecamatan, nama_kecamatan) VALUES (1, 9904, '980103', 'KAB')",
+            ),
+            db
+                .prepare(
+                    'INSERT INTO kelurahan_suara_partai (tingkat, kode_dapil, kode_kelurahan, partai_id, suara) VALUES (1, 9903, 9871022001, ?, 40)',
+                )
+                .bind(partyId),
+            db
+                .prepare(
+                    'INSERT INTO kelurahan_suara_partai (tingkat, kode_dapil, kode_kelurahan, partai_id, suara) VALUES (1, 9903, 9801022001, ?, 50)',
+                )
+                .bind(partyId),
+            db
+                .prepare(
+                    'INSERT INTO kelurahan_suara_partai (tingkat, kode_dapil, kode_kelurahan, partai_id, suara) VALUES (1, 9904, 9871032001, ?, 80)',
+                )
+                .bind(partyId),
+            db
+                .prepare(
+                    'INSERT INTO kelurahan_suara_partai (tingkat, kode_dapil, kode_kelurahan, partai_id, suara) VALUES (1, 9904, 9801032001, ?, 80)',
+                )
+                .bind(partyId),
+        ];
+        try {
+            await db.batch(insert);
+            const { body } = await json('/v1/2024/dpr_ri/kekuatan?partai=pan&provinsi=98');
+            expect(body.data.pemukiman).toEqual({ kota: 140, kabupaten: 250, belum_terpetakan: 310 });
+            expect(body.data).toMatchObject({
+                suara_gambar: 70,
+                suara_caleg: 30,
+                suara_terbagi: 100,
+                dapil_tanpa_pecahan: 3,
+            });
+        } finally {
+            await db.batch([
+                db.prepare('DELETE FROM kelurahan_suara_partai WHERE tingkat = 1 AND kode_dapil IN (9903, 9904)'),
+                db.prepare('DELETE FROM dapil_kecamatan WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904)'),
+                db.prepare('DELETE FROM caleg WHERE tingkat = 1 AND kode_dapil = 9901'),
+                db.prepare('DELETE FROM suara_partai WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904)'),
+                db.prepare('DELETE FROM dapil WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904)'),
+            ]);
+        }
+    });
+
+    it('reads a kabupaten/kota council from the dapil code', async () => {
+        const party = await env.DB_2024.prepare("SELECT partai_id AS id FROM partai WHERE kode_partai = 'pan'").first<{
+            id: number;
+        }>();
+        const partyId = party?.id ?? 0;
+        const db = env.DB_2024;
+        try {
+            await db.batch([
+                db
+                    .prepare(
+                        'INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, kode_kabupaten, jumlah_kursi, total_suara_sah) VALUES (3, 9905, ?, 98, 9871, 1, 80)',
+                    )
+                    .bind('UJI KOTA'),
+                db
+                    .prepare(
+                        'INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, kode_kabupaten, jumlah_kursi, total_suara_sah) VALUES (3, 9906, ?, 98, 9801, 1, 20)',
+                    )
+                    .bind('UJI KAB'),
+                db
+                    .prepare(
+                        "INSERT INTO suara_partai (tingkat, kode_dapil, partai_id, suara, sumber) VALUES (3, 9905, ?, 80, 'uji')",
+                    )
+                    .bind(partyId),
+                db
+                    .prepare(
+                        "INSERT INTO suara_partai (tingkat, kode_dapil, partai_id, suara, sumber) VALUES (3, 9906, ?, 20, 'uji')",
+                    )
+                    .bind(partyId),
+            ]);
+            const { body } = await json('/v1/2024/dprd_kabupaten_kota/kekuatan?partai=pan&provinsi=98');
+            expect(body.data.pemukiman).toEqual({ kota: 80, kabupaten: 20, belum_terpetakan: 0 });
+        } finally {
+            await db.batch([
+                db.prepare('DELETE FROM suara_partai WHERE tingkat = 3 AND kode_dapil IN (9905, 9906)'),
+                db.prepare('DELETE FROM dapil WHERE tingkat = 3 AND kode_dapil IN (9905, 9906)'),
+            ]);
+        }
+    });
+
+    it('has no kota split for 2019, and no province split except DPR RI', async () => {
+        const national = await json('/v1/2019/dpr_ri/kekuatan?partai=pan');
+        expect(national.status).toBe(200);
+        expect(national.body.data.pemukiman).toBeNull();
+        expect((await json('/v1/2019/dpr_ri/kekuatan?partai=pan&provinsi=11')).status).toBe(200);
+        expect((await json('/v1/2019/dprd_provinsi/kekuatan?partai=pan&provinsi=11')).body.error.code).toBe(
+            'tidak-tersedia',
+        );
+        expect((await json('/v1/2024/dpr_ri/kekuatan')).status).toBe(400);
     });
 });
