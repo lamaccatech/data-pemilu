@@ -20,6 +20,24 @@ export function registerBatasRoutes(app: Hono<AppEnv>): void {
         });
     });
 
+    // Kecamatan shapes of one kabupaten, for drawing the inside of a dapil. 2024 only.
+    app.get('/v1/:pemilu/batas/kecamatan', async (c) => {
+        const { pemilu } = await election2024(c, 'Batas kecamatan');
+        const { kabupaten } = parseParams(c, { kabupaten: fields.kabupaten });
+        const object = await c.env.GEO.get(`${pemilu}/kecamatan/${kabupaten}.geojson`);
+        if (object === null) {
+            throw notFound(
+                'batas-tidak-ditemukan',
+                `Batas kecamatan untuk kabupaten ${kabupaten} tidak tersedia pada Pemilu ${pemilu}.`,
+            );
+        }
+        const meta = JSON.stringify({ pemilu, wilayah: 'kecamatan', kabupaten: String(kabupaten) });
+        return c.body(`{"data":${await object.text()},"meta":${meta}}`, 200, {
+            'Content-Type': 'application/json',
+            'Cache-Control': CACHE_CONTROL,
+        });
+    });
+
     // Dapil outlines of one province, for drawing the dapil once a province is chosen. 2024 only: there is no
     // list of which kecamatan made up a 2019 dapil.
     app.get('/v1/:pemilu/:tingkat/batas/dapil', async (c) => {

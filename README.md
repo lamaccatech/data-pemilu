@@ -75,6 +75,7 @@ returned as strings.
 | 11 | `GET /v1/:pemilu/batas/provinsi` | Province boundaries at that election, as a GeoJSON `FeatureCollection` in `data` |
 | 12 | `GET /v1/2024/:tingkat/batas/dapil?provinsi=&kabupaten=` | Dapil outlines of one province, optionally one kabupaten. `provinsi` is required |
 | 13 | `GET /v1/2024/:tingkat/padanan` | Every 2024 dapil of the level with a comparable 2019 dapil, as `kode_dapil` and `kode_dapil_2019` pairs present in both results |
+| 14 | `GET /v1/2024/batas/kecamatan?kabupaten=` | Kecamatan shapes of one kabupaten, for drawing the inside of a dapil. Each feature has `kode_kecamatan`, `nama_kecamatan` and `kode_kabupaten` |
 
 Error codes: `tidak-berwenang` (401), `parameter-tidak-valid` (400, also for unknown query parameters),
 `pemilu-tidak-ditemukan`, `partai-tidak-ditemukan`, `dapil-tidak-ditemukan`, `kecamatan-tidak-ditemukan`,
@@ -199,7 +200,7 @@ done
 # 4. Check the counts against the table above, for example:
 pnpm exec wrangler d1 execute pemilu2024 --remote --command 'SELECT COUNT(*) FROM kelurahan_suara_caleg'
 
-# 5. Boundary files: 115 objects, about 13 MB. Run `pnpm build-geo` first.
+# 5. Boundary files: 629 objects, about 20 MB (514 of them the kecamatan shapes). Run `pnpm build-geo` first.
 pnpm exec wrangler r2 bucket create data-pemilu-batas
 (cd data/geo && find 2024 2019 -name '*.geojson') | while read -r key; do
     pnpm exec wrangler r2 object put "data-pemilu-batas/$key" --remote \

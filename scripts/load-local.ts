@@ -1,6 +1,6 @@
 /**
  * Applies the migrations and every generated SQL file to the local D1 (.wrangler/state), through Wrangler.
- * Never touches a remote database.
+ * Never touches a remote database. With `--geo` it only reloads the boundary files into the local R2 bucket.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -50,6 +50,11 @@ async function uploadBoundaries(): Promise<void> {
 }
 
 async function main() {
+    // `--geo` reloads only the boundary files, which takes seconds; the databases take minutes.
+    if (process.argv.includes('--geo')) {
+        await uploadBoundaries();
+        return;
+    }
     if (!fs.existsSync(MANIFEST_PATH)) {
         throw new Error('data/sql/manifest.json not found. Run `pnpm build-sql` first.');
     }
