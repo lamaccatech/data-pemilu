@@ -46,6 +46,15 @@ LEFT JOIN (
 ) p ON p.kode_dapil = s.kode_dapil
 WHERE s.tingkat = ? AND s.partai_id = ? AND s.suara > 0`;
 
+// Polling places abroad have codes starting with 99, some all digits (990101) and some with letters
+// (99AA01). They are neither kota nor kabupaten, and have no kelurahan, so a dapil that holds any is
+// split by its kelurahan and its votes abroad stay unmapped.
+const IS_ABROAD =
+    "CASE WHEN kode_kecamatan LIKE '99%' OR kode_kecamatan NOT GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]' THEN 1 ELSE 0 END";
+const AT_HOME = "kode_kecamatan NOT LIKE '99%' AND kode_kecamatan GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'";
+const IS_KOTA = `CASE WHEN ${AT_HOME} AND CAST(substr(kode_kecamatan, 1, 4) AS INTEGER) % 100 >= 71 THEN 1 ELSE 0 END`;
+const IS_KABUPATEN = `CASE WHEN ${AT_HOME} AND CAST(substr(kode_kecamatan, 1, 4) AS INTEGER) % 100 < 71 THEN 1 ELSE 0 END`;
+
 // Kemendagri: the last two digits of a kabupaten code are 71 or higher for a kota. Sabang and
 // Singkawang are cities under that rule; Lima Puluh Kota, Kotawaringin and Kotabaru are not.
 // A dapil that sits wholly in one kind keeps its full party votes. A dapil that contains both is
@@ -54,16 +63,9 @@ const SETTLEMENT_SQL = `
 WITH kinds AS (
     SELECT kode_dapil,
         CASE
-            WHEN SUM(CASE WHEN kode_kecamatan GLOB '[0-9]*' AND CAST(substr(kode_kecamatan, 1, 4) AS INTEGER) % 100 >= 71 THEN 1 ELSE 0 END) > 0
-             AND SUM(CASE WHEN kode_kecamatan GLOB '[0-9]*' AND CAST(substr(kode_kecamatan, 1, 4) AS INTEGER) % 100 < 71 THEN 1 ELSE 0 END) = 0
-             AND SUM(CASE WHEN kode_kecamatan NOT GLOB '[0-9]*' THEN 1 ELSE 0 END) = 0
-            THEN 'kota'
-            WHEN SUM(CASE WHEN kode_kecamatan GLOB '[0-9]*' AND CAST(substr(kode_kecamatan, 1, 4) AS INTEGER) % 100 < 71 THEN 1 ELSE 0 END) > 0
-             AND SUM(CASE WHEN kode_kecamatan GLOB '[0-9]*' AND CAST(substr(kode_kecamatan, 1, 4) AS INTEGER) % 100 >= 71 THEN 1 ELSE 0 END) = 0
-             AND SUM(CASE WHEN kode_kecamatan NOT GLOB '[0-9]*' THEN 1 ELSE 0 END) = 0
-            THEN 'kabupaten'
-            WHEN SUM(CASE WHEN kode_kecamatan GLOB '[0-9]*' THEN 1 ELSE 0 END) > 0
-            THEN 'campuran'
+            WHEN SUM(${IS_KOTA}) > 0 AND SUM(${IS_KABUPATEN}) = 0 AND SUM(${IS_ABROAD}) = 0 THEN 'kota'
+            WHEN SUM(${IS_KABUPATEN}) > 0 AND SUM(${IS_KOTA}) = 0 AND SUM(${IS_ABROAD}) = 0 THEN 'kabupaten'
+            WHEN SUM(${IS_KOTA}) + SUM(${IS_KABUPATEN}) > 0 THEN 'campuran'
             ELSE 'lain'
         END AS jenis
     FROM dapil_kecamatan

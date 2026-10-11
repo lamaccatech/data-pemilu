@@ -574,6 +574,25 @@ describe('susunan suara', () => {
                     'INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, jumlah_kursi, total_suara_sah) VALUES (1, 9904, ?, 98, 1, 100)',
                 )
                 .bind('UJI LEBIH'),
+            // A city dapil that also holds a polling place abroad, whose code is not a kecamatan code.
+            db
+                .prepare(
+                    'INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, jumlah_kursi, total_suara_sah) VALUES (1, 9905, ?, 98, 1, 100)',
+                )
+                .bind('UJI LUAR NEGERI'),
+            db
+                .prepare(
+                    "INSERT INTO suara_partai (tingkat, kode_dapil, partai_id, suara, sumber) VALUES (1, 9905, ?, 100, 'uji')",
+                )
+                .bind(partyId),
+            db.prepare(
+                "INSERT INTO dapil_kecamatan (tingkat, kode_dapil, kode_kecamatan, nama_kecamatan) VALUES (1, 9905, '987104', 'KOTA'), (1, 9905, '99AA01', 'San Francisco'), (1, 9905, '990101', 'Abu Dhabi')",
+            ),
+            db
+                .prepare(
+                    'INSERT INTO kelurahan_suara_partai (tingkat, kode_dapil, kode_kelurahan, partai_id, suara) VALUES (1, 9905, 9871042001, ?, 60)',
+                )
+                .bind(partyId),
             db
                 .prepare(
                     "INSERT INTO suara_partai (tingkat, kode_dapil, partai_id, suara, sumber) VALUES (1, 9901, ?, 100, 'uji')",
@@ -641,20 +660,25 @@ describe('susunan suara', () => {
         try {
             await db.batch(insert);
             const { body } = await json('/v1/2024/dpr_ri/kekuatan?partai=pan&provinsi=98');
-            expect(body.data.pemukiman).toEqual({ kota: 140, kabupaten: 250, belum_terpetakan: 310 });
+            // 9905: its 60 votes in the city's kelurahan are kota; the 40 cast abroad are neither.
+            expect(body.data.pemukiman).toEqual({ kota: 200, kabupaten: 250, belum_terpetakan: 350 });
             expect(body.data).toMatchObject({
                 suara_gambar: 70,
                 suara_caleg: 30,
                 suara_terbagi: 100,
-                dapil_tanpa_pecahan: 3,
+                dapil_tanpa_pecahan: 4,
             });
         } finally {
             await db.batch([
-                db.prepare('DELETE FROM kelurahan_suara_partai WHERE tingkat = 1 AND kode_dapil IN (9903, 9904)'),
-                db.prepare('DELETE FROM dapil_kecamatan WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904)'),
+                db.prepare('DELETE FROM kelurahan_suara_partai WHERE tingkat = 1 AND kode_dapil IN (9903, 9904, 9905)'),
+                db.prepare(
+                    'DELETE FROM dapil_kecamatan WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904, 9905)',
+                ),
                 db.prepare('DELETE FROM caleg WHERE tingkat = 1 AND kode_dapil = 9901'),
-                db.prepare('DELETE FROM suara_partai WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904)'),
-                db.prepare('DELETE FROM dapil WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904)'),
+                db.prepare(
+                    'DELETE FROM suara_partai WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904, 9905)',
+                ),
+                db.prepare('DELETE FROM dapil WHERE tingkat = 1 AND kode_dapil IN (9901, 9902, 9903, 9904, 9905)'),
             ]);
         }
     });
