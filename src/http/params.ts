@@ -16,6 +16,13 @@ export const fields = {
     // Text, not a number: overseas polling places of DKI JAKARTA II have codes such as 99AA01.
     kode_kecamatan: z.string().regex(/^[1-9][0-9A-Z]{5}$/, 'kode kecamatan harus berupa 6 karakter'),
     nomor_urut: digits(/^[1-9]\d{0,2}$/, 'nomor_urut harus berupa angka 1 sampai 999'),
+    // Votes to try for some parties of a dapil: "pan:210000,pks:95000". The rest keep their result.
+    suara: z
+        .string()
+        .regex(
+            /^[a-z0-9_]{1,32}:\d{1,9}(,[a-z0-9_]{1,32}:\d{1,9})*$/,
+            'suara harus berupa daftar kode_partai:jumlah yang dipisah koma, misalnya "pan:210000,pks:95000"',
+        ),
     partai: z.string().regex(/^[a-z0-9_]{1,32}$/, 'partai harus berupa kode partai, misalnya "pan"'),
     provinsi: digits(/^[1-9]\d$/, 'provinsi harus berupa kode 2 angka'),
     kabupaten: digits(/^[1-9]\d{3}$/, 'kabupaten harus berupa kode 4 angka'),

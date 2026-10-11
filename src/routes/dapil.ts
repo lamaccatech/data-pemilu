@@ -4,12 +4,13 @@ import { readAliases, readDapil, readDapilList, readDapilVotes, readPadanan, rea
 import { eligibleParties, loadElection, partyCode, requireParty } from '../db/election';
 import { readSettlementSplit, readVoteSplit } from '../db/kekuatan';
 import { readCandidateAreaTotals } from '../db/wilayah';
-import { notFound } from '../errors';
+import { ApiError, notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, electionOf, fields, optionalParty, parseParams } from '../http/params';
 import { type DapilView, groupByDapil, summariseViews, viewDapil, votesMap } from '../service/dapil';
 import { type Earlier, earlierOf, viewCompetition, viewStandings } from '../service/persaingan';
 import { checkSpread } from '../service/sebaran';
+import { simulateSeats } from '../service/simulasi';
 import { TINGKAT, TINGKAT_NAMES, type Tingkat } from '../tingkat';
 
 interface Earlier2019 {
@@ -333,6 +334,62 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 padanan_2019_tersedia: before !== null,
                 // Whether candidate votes below dapil level can be trusted here. Null for 2019, which has none.
                 sebaran_wilayah: areaTotals === null ? null : checkSpread(tingkat, candidates, areaTotals),
+            },
+        );
+    });
+
+    // 27. A what-if: the seats of a dapil with some parties' votes replaced, beside the real result.
+    app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/simulasi', async (c) => {
+        const { pemilu, election, db } = await electionOf(c);
+        const { tingkat, kode_dapil, suara } = parseParams(c, {
+            tingkat: fields.tingkat,
+            kode_dapil: fields.kode_dapil,
+            suara: fields.suara.optional(),
+        });
+        const { dapil, votes } = await readDapil(db, tingkat, kode_dapil);
+        if (dapil === null) {
+            throw dapilNotFound(tingkat, kode_dapil, pemilu);
+        }
+        const actual = votesMap(votes);
+        const tried = new Map(actual);
+        const named = new Set<string>();
+        for (const entry of suara === undefined ? [] : suara.split(',')) {
+            const [code = '', amount = ''] = entry.split(':');
+            const party = requireParty(election, code);
+            // A party that did not stand in the dapil has no result to change, and one named twice is a slip.
+            if (!actual.has(party.partai_id) || named.has(code)) {
+                throw new ApiError(
+                    400,
+                    'parameter-tidak-valid',
+                    named.has(code)
+                        ? `Parameter tidak valid: partai "${code}" disebut lebih dari sekali.`
+                        : `Parameter tidak valid: partai "${code}" tidak punya suara di dapil ${kode_dapil}.`,
+                );
+            }
+            named.add(code);
+            tried.set(party.partai_id, Number(amount));
+        }
+        const simulated = simulateSeats(election, tingkat, dapil, actual, tried);
+        if (simulated === null) {
+            throw notFound(
+                'tidak-tersedia',
+                `Dapil ${kode_dapil} tidak dapat disimulasikan: tidak ada suara partai, atau suara yang dicoba semuanya nol.`,
+            );
+        }
+        return ok(
+            c,
+            {
+                kode_dapil: String(dapil.kode_dapil),
+                nama_dapil: dapil.nama_dapil,
+                jumlah_kursi: dapil.jumlah_kursi,
+                ...simulated,
+            },
+            {
+                pemilu,
+                tingkat,
+                partai_diubah: [...named],
+                // Which parties pass the national threshold is taken from the real national result.
+                ambang_batas: tingkat === 'dpr_ri' ? 'hasil-nasional' : null,
             },
         );
     });

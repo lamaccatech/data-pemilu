@@ -20,6 +20,10 @@ export const cacheResponses: MiddlewareHandler<AppEnv> = async (c, next) => {
         return next();
     }
     const url = new URL(c.req.url);
+    // A what-if is asked with whatever votes the caller tries: nothing to gain from keeping each one.
+    if (url.pathname.endsWith('/simulasi')) {
+        return next();
+    }
     url.searchParams.set(VERSION_PARAMETER, RESPONSE_VERSION);
     const key = new Request(url);
     const hit = await cache.match(key);

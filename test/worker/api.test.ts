@@ -331,6 +331,73 @@ describe('padanan and alias', () => {
         expect(without.body.meta.padanan_2019_tersedia).toBe(false);
     });
 
+    it('simulates the seats of a dapil with some votes replaced', async () => {
+        const base = '/v1/2024/dpr_ri/dapil/1101';
+        const actual = await json(`${base}?partai=pan`);
+        const own = actual.body.data;
+        // Without votes to try, the what-if is the result itself.
+        const same = await json(`${base}/simulasi`);
+        expect(same.status).toBe(200);
+        expect(same.body.data.perubahan_kursi).toEqual([]);
+        expect(same.body.data.total_suara_sah).toBe(same.body.data.total_suara_sah_awal);
+        expect(same.body.data.harga_kursi_terakhir).toBe(own.harga_kursi_terakhir);
+        expect(same.body.data.pembagian_kursi).toHaveLength(own.jumlah_kursi + 1);
+        const pan = (body: { data: { partai: { kode_partai: string }[] } }) =>
+            body.data.partai.find((row) => row.kode_partai === 'pan') as {
+                suara: number;
+                suara_awal: number;
+                kursi: number;
+                kursi_awal: number;
+                kekurangan_kursi_berikutnya: number | null;
+            };
+        expect(pan(same.body)).toMatchObject({ suara: own.suara_partai, kursi: own.kursi_partai });
+
+        // The target for the next seat is the fewest votes that win it: one vote less does not.
+        const target = own.target_suara_kursi_berikutnya;
+        const reached = await json(`${base}/simulasi?suara=pan:${target}`);
+        expect(pan(reached.body)).toMatchObject({
+            suara: target,
+            suara_awal: own.suara_partai,
+            kursi: own.kursi_partai + 1,
+            kursi_awal: own.kursi_partai,
+        });
+        const gained = reached.body.data.perubahan_kursi;
+        expect(gained[0]).toEqual({ kode_partai: 'pan', selisih: 1 });
+        expect(gained.reduce((sum: number, row: { selisih: number }) => sum + row.selisih, 0)).toBe(0);
+        expect(reached.body.data.total_suara_sah).toBe(
+            reached.body.data.total_suara_sah_awal + target - own.suara_partai,
+        );
+        expect(reached.body.meta).toMatchObject({ partai_diubah: ['pan'], ambang_batas: 'hasil-nasional' });
+        // Two votes under, not one: one under can be an exact tie of quotients, which the seat table gives
+        // to the party with more votes while the target asks for a clear win.
+        const short = await json(`${base}/simulasi?suara=pan:${target - 2}`);
+        expect(pan(short.body)).toMatchObject({ kursi: own.kursi_partai, kekurangan_kursi_berikutnya: 2 });
+        expect(short.body.data.perubahan_kursi).toEqual([]);
+
+        // Every seat is always given out.
+        const seats = (body: { data: { partai: { kursi: number }[] } }) =>
+            body.data.partai.reduce((sum, row) => sum + row.kursi, 0);
+        expect(seats(reached.body)).toBe(own.jumlah_kursi);
+        // A party under the national threshold wins no DPR RI seat whatever it polls here.
+        const under = await json(`${base}/simulasi?suara=psi:9000000`);
+        const psi = under.body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'psi');
+        expect(psi).toMatchObject({ kursi: 0, lolos_ambang_batas: false, kekurangan_kursi_berikutnya: null });
+    });
+
+    it('refuses a what-if it cannot read', async () => {
+        const base = '/v1/2024/dpr_ri/dapil/1101/simulasi';
+        for (const query of ['suara=pan', 'suara=pan:-5', 'suara=pan:1,pan:2', 'suara=pan:1;pks:2', 'suara=']) {
+            const { status, body } = await json(`${base}?${query}`);
+            expect(status, query).toBe(400);
+            expect(body.error.code, query).toBe('parameter-tidak-valid');
+        }
+        expect((await json(`${base}?suara=tidak_ada:5`)).body.error.code).toBe('partai-tidak-ditemukan');
+        expect((await json('/v1/2024/dpr_ri/dapil/9999/simulasi')).body.error.code).toBe('dapil-tidak-ditemukan');
+        // A what-if is not kept: asked twice, it is worked out twice.
+        expect((await call(`${base}?suara=pan:5`)).headers.get('X-Cache')).toBeNull();
+        expect((await call(`${base}?suara=pan:5`)).headers.get('X-Cache')).toBeNull();
+    });
+
     it('lists the comparable pairs of a level', async () => {
         const { status, body } = await json('/v1/2024/dpr_ri/padanan');
         expect(status).toBe(200);
