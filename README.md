@@ -74,6 +74,7 @@ returned as strings.
 | 10 | `GET /v1/2024/dapil-alias` | Applications' own dapil names mapped to `kode_dapil` |
 | 11 | `GET /v1/:pemilu/batas/provinsi` | Province boundaries at that election, as a GeoJSON `FeatureCollection` in `data` |
 | 12 | `GET /v1/2024/:tingkat/batas/dapil?provinsi=&kabupaten=` | Dapil outlines of one province, optionally one kabupaten. `provinsi` is required |
+| 13 | `GET /v1/2024/:tingkat/padanan` | Every 2024 dapil of the level with a comparable 2019 dapil, as `kode_dapil` and `kode_dapil_2019` pairs present in both results |
 
 Error codes: `tidak-berwenang` (401), `parameter-tidak-valid` (400, also for unknown query parameters),
 `pemilu-tidak-ditemukan`, `partai-tidak-ditemukan`, `dapil-tidak-ditemukan`, `kecamatan-tidak-ditemukan`,

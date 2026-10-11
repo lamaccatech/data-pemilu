@@ -262,6 +262,14 @@ describe('padanan and alias', () => {
         expect(body.data).toMatchObject({ padanan: null, hasil_2019: null });
     });
 
+    it('lists the comparable pairs of a level', async () => {
+        const { status, body } = await json('/v1/2024/dpr_ri/padanan');
+        expect(status).toBe(200);
+        expect(body.data).toEqual([{ kode_dapil: '1101', kode_dapil_2019: '1101' }]);
+        expect(body.meta).toMatchObject({ tingkat: 'dpr_ri', jumlah_padanan: 1 });
+        expect((await json('/v1/2019/dpr_ri/padanan')).status).toBe(404);
+    });
+
     it('lists the aliases', async () => {
         const { body } = await json('/v1/2024/dapil-alias');
         expect(body.data).toEqual([

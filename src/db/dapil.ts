@@ -127,6 +127,22 @@ export async function readPadanan(db: D1Database, tingkat: Tingkat, kodeDapil: n
     return { dapil: rows<DapilRecord>(dapil)[0] ?? null, padanan: rows<PadananRecord>(padanan)[0] ?? null };
 }
 
+export interface PadananPairRecord {
+    kode_dapil_2024: number;
+    kode_dapil_2019: number;
+}
+
+/** Every comparable 2024 to 2019 pair of a level whose two sides are both in the results. */
+export async function readPadananList(db: D1Database, tingkat: Tingkat) {
+    const result = await db
+        .prepare(
+            'SELECT kode_dapil_2024, kode_dapil_2019 FROM padanan_dapil WHERE tingkat = ? AND sebanding = 1 AND ada_di_hasil_2019 = 1 AND ada_di_hasil_2024 = 1 ORDER BY kode_dapil_2024',
+        )
+        .bind(TINGKAT[tingkat])
+        .all<PadananPairRecord>();
+    return result.results;
+}
+
 export interface AliasRecord {
     tingkat: number;
     nama_di_aplikasi: string;

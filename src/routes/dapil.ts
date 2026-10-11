@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { countedVotes, findStandouts, rankQuotients, round2 } from '../calc';
-import { readAliases, readDapil, readDapilList, readPadanan } from '../db/dapil';
+import { readAliases, readDapil, readDapilList, readPadanan, readPadananList } from '../db/dapil';
 import { eligibleParties, loadElection, partyCode, requireParty } from '../db/election';
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
@@ -164,6 +164,19 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 data_lengkap: complete,
             },
         );
+    });
+
+    // 13. Every 2024 dapil of a level that has a comparable 2019 dapil, so a caller can compare a whole
+    // level by reading the two dapil lists once instead of asking per dapil.
+    app.get('/v1/:pemilu/:tingkat/padanan', async (c) => {
+        const { pemilu, db } = await election2024(c, 'Padanan dapil');
+        const { tingkat } = parseParams(c, { tingkat: fields.tingkat });
+        const pairs = await readPadananList(db, tingkat);
+        const data = pairs.map((pair) => ({
+            kode_dapil: String(pair.kode_dapil_2024),
+            kode_dapil_2019: String(pair.kode_dapil_2019),
+        }));
+        return ok(c, data, { pemilu, tingkat, jumlah_padanan: data.length });
     });
 
     // 9. The matching 2019 dapil and, when the two are comparable, the 2019 calculation for the same party.
