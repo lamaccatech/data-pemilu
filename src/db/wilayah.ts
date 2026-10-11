@@ -49,7 +49,7 @@ export interface KecamatanVotesRecord {
 /** Party votes of a dapil summed per kecamatan from the kelurahan table, with the dapil-level votes to compare. */
 export async function readKecamatanVotes(db: D1Database, tingkat: Tingkat, kodeDapil: number, partyId: number) {
     const level = TINGKAT[tingkat];
-    const [dapil, kecamatan, votes, kelurahan, dapilVotes, partyVotes, partyAreas] = await db.batch([
+    const [dapil, kecamatan, votes, kelurahan, dapilVotes, partyVotes, partyAreas, sharers] = await db.batch([
         db.prepare(DAPIL).bind(level, kodeDapil),
         db
             .prepare(
@@ -70,6 +70,12 @@ export async function readKecamatanVotes(db: D1Database, tingkat: Tingkat, kodeD
             .prepare('SELECT suara FROM suara_partai WHERE tingkat = ? AND kode_dapil = ? AND partai_id = ?')
             .bind(level, kodeDapil, partyId),
         ...partySpread(db, level, kodeDapil),
+        // The other dapil that hold one of this dapil's kecamatan.
+        db
+            .prepare(
+                'SELECT mine.kode_kecamatan AS kode_kecamatan, other.kode_dapil AS kode_dapil FROM dapil_kecamatan mine CROSS JOIN dapil_kecamatan other ON other.tingkat = mine.tingkat AND other.kode_kecamatan = mine.kode_kecamatan AND other.kode_dapil <> mine.kode_dapil WHERE mine.tingkat = ? AND mine.kode_dapil = ?',
+            )
+            .bind(level, kodeDapil),
     ]);
     return {
         dapil: rows<DapilName>(dapil)[0] ?? null,
@@ -79,6 +85,7 @@ export async function readKecamatanVotes(db: D1Database, tingkat: Tingkat, kodeD
         dapilVotes: rows<{ suara: number }>(dapilVotes)[0]?.suara ?? null,
         partyVotes: rows<PartyTotalRecord>(partyVotes),
         partyAreas: rows<PartyTotalRecord>(partyAreas),
+        sharers: rows<{ kode_kecamatan: string; kode_dapil: number }>(sharers),
     };
 }
 

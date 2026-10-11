@@ -134,11 +134,17 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         // Kelurahan that give the parties more votes than the dapil are not shown as votes at all.
         const votes = group(check.status === 'tidak_sesuai' ? [] : found.votes, (row) => String(row.kode_kecamatan));
         const kelurahan = new Map(found.kelurahanCounts.map((row) => [String(row.kode_kecamatan), row.jumlah]));
+        const sharers = group(found.sharers, (row) => row.kode_kecamatan);
         let fromKelurahan = 0;
         let withoutData = 0;
         const data = found.kecamatan.map((kecamatan) => {
             const rows = votes.get(kecamatan.kode_kecamatan);
-            const place = { kode_kecamatan: kecamatan.kode_kecamatan, nama_kecamatan: kecamatan.nama_kecamatan };
+            const place = {
+                kode_kecamatan: kecamatan.kode_kecamatan,
+                nama_kecamatan: kecamatan.nama_kecamatan,
+                // Other dapil that hold this kecamatan too. The figures here are this dapil's part of it.
+                dapil_lain: (sharers.get(kecamatan.kode_kecamatan) ?? []).map((row) => String(row.kode_dapil)),
+            };
             const dpt = voters.get(kecamatan.kode_kecamatan) ?? null;
             if (rows === undefined) {
                 withoutData++;

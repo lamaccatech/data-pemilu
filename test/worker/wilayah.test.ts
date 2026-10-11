@@ -48,6 +48,7 @@ describe('kecamatan and kelurahan endpoints', () => {
             {
                 kode_kecamatan: '700101',
                 nama_kecamatan: 'KEC SATU',
+                dapil_lain: ['700002'],
                 data_tersedia: true,
                 jumlah_kelurahan_berdata: 2,
                 suara_partai: 110,
@@ -64,6 +65,7 @@ describe('kecamatan and kelurahan endpoints', () => {
             {
                 kode_kecamatan: '700102',
                 nama_kecamatan: 'KEC DUA',
+                dapil_lain: [],
                 data_tersedia: false,
                 jumlah_kelurahan_berdata: 0,
                 suara_partai: null,
@@ -541,6 +543,7 @@ describe('ruang suara', () => {
             {
                 kode_kecamatan: '700104',
                 nama_kecamatan: 'KEC EMPAT',
+                dapil_lain: [],
                 data_tersedia: false,
                 jumlah_kelurahan_berdata: 0,
                 suara_partai: null,
