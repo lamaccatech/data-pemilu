@@ -19,7 +19,8 @@ export interface TopCandidate {
     nama: string;
     suara: number;
     persen_suara_partai: number;
-    terpilih: boolean;
+    /** Null when the dapil marks no winner at all. */
+    terpilih: boolean | null;
 }
 
 /** A candidate who won a seat. */
@@ -111,7 +112,7 @@ export interface Competition {
 
 const percent = (part: number, whole: number) => (whole > 0 ? round2((part / whole) * 100) : 0);
 
-function personalVotes(party: Party, partyVotes: number, candidates: readonly Candidate[]) {
+function personalVotes(party: Party, partyVotes: number, candidates: readonly Candidate[], winnersMarked: boolean) {
     const own = candidates.filter((row) => row.partai_id === party.partai_id);
     const total = own.reduce((sum, row) => sum + row.suara, 0);
     // No candidate votes, or more of them than the party has: the source is incomplete here, so the
@@ -132,7 +133,7 @@ function personalVotes(party: Party, partyVotes: number, candidates: readonly Ca
                       nama: top.nama,
                       suara: top.suara,
                       persen_suara_partai: percent(top.suara, partyVotes),
-                      terpilih: top.kursi_ke > 0,
+                      terpilih: winnersMarked ? top.kursi_ke > 0 : null,
                   },
     };
 }
@@ -255,6 +256,7 @@ export function viewCompetition(
     const seats = dapil.jumlah_kursi;
     const counted = countedVotes(votesByParty, eligibleParties(election, tingkat));
     const contenders: Contender[] = [];
+    const winnersMarked = candidates.some((row) => row.kursi_ke > 0);
     let total = 0;
     for (const votes of votesByParty.values()) {
         total += votes;
@@ -285,7 +287,7 @@ export function viewCompetition(
             peluang_dekat: view.peluang_dekat === true,
             // Set once every party is known.
             peringkat: 0,
-            ...personalVotes(party, votes, candidates),
+            ...personalVotes(party, votes, candidates, winnersMarked),
             caleg_terpilih: seatHolders(party, candidates).map((holder) => {
                 const then = earlier?.caleg.get(normalizePersonName(holder.nama));
                 return {

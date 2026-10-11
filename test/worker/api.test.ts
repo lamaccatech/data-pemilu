@@ -177,12 +177,20 @@ describe('dapil endpoints against the fixtures', () => {
                 const { partai_id: _id, kode_partai: _code, suara_2019: _before, ...rest } = row;
                 return rest;
             };
-            expect(body.data.tokoh_menonjol.map(withoutParty)).toEqual(expected.tokoh_menonjol?.map(withoutParty));
             expect(body.data.caleg.every((row: { kode_partai: string }) => row.kode_partai === 'pan')).toBe(true);
             expect(body.meta.data_lengkap).toBe(true);
-
             const everyone = await json(`/v1/2024/${expected.tingkat}/dapil/${expected.kode_dapil}/caleg`);
             expect(everyone.body.data.caleg.length).toBeGreaterThan(body.data.caleg.length);
+            const winnersMarked = everyone.body.data.caleg.some((row: { kursi_ke: number }) => row.kursi_ke > 0);
+            expect(body.meta.pemenang_ditandai).toBe(winnersMarked);
+            if (!winnersMarked) {
+                // The reference still lists the strongest "unseated" candidates here, who are the winners
+                // themselves. The API names nobody.
+                expect(body.data.tokoh_menonjol).toBeNull();
+                expect(everyone.body.data.tokoh_menonjol).toBeNull();
+                return;
+            }
+            expect(body.data.tokoh_menonjol.map(withoutParty)).toEqual(expected.tokoh_menonjol?.map(withoutParty));
             expect(
                 everyone.body.data.tokoh_menonjol.some((row: { partai_sendiri: boolean }) => row.partai_sendiri),
             ).toBe(false);

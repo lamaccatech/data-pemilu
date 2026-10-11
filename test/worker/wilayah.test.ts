@@ -398,6 +398,7 @@ describe('ruang suara', () => {
                 suara: 150,
                 kursi_ke: 1,
             },
+            pemenang_ditandai: true,
             suara_tercatat: 55,
             wilayah: [
                 {
@@ -500,5 +501,104 @@ describe('ruang suara', () => {
         const none = await json('/v1/2024/dpr_ri/dapil/1101/caleg/pan/1/wilayah');
         expect(none.body.data).toMatchObject({ suara_tercatat: null, wilayah: null });
         expect(none.body.meta.sebaran_wilayah.status).toBe('tidak_tersedia');
+    });
+
+    it('withholds party votes where the kelurahan give the parties more than the dapil', async () => {
+        const db = env.DB_2024;
+        // dprd_kabupaten_kota dapil 700004: every kelurahan carries double the party votes.
+        await db.batch([
+            db.prepare(
+                "INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, nama_provinsi, jumlah_kursi, total_suara_sah) VALUES (3, 700004, 'UJI 4', 70, 'UJI', 3, 100)",
+            ),
+            db.prepare("INSERT INTO suara_partai VALUES (3, 700004, 12, 60, 'uji'), (3, 700004, 1, 40, 'uji')"),
+            db.prepare("INSERT INTO caleg VALUES (3, 700004, 12, 1, 'CALEG EMPAT', 'L', 30, 0)"),
+            db.prepare("INSERT INTO dapil_kecamatan VALUES (3, 700004, '700104', 'KEC EMPAT')"),
+            db.prepare(
+                'INSERT INTO kelurahan_suara_partai VALUES (3, 700004, 7001041001, 12, 120), (3, 700004, 7001041001, 1, 80)',
+            ),
+            db.prepare('INSERT INTO kelurahan_suara_caleg VALUES (3, 700004, 7001041001, 12, 1, 30)'),
+            db.prepare(
+                "INSERT INTO kelurahan_dpt VALUES (7001041001, 'DESA E', 150, 70, 80, 10, 20, 30, 30, 30, 10, 20)",
+            ),
+        ]);
+        const base = '/v1/2024/dprd_kabupaten_kota/dapil/700004';
+        const kecamatan = await json(`${base}/kecamatan?partai=pan`);
+        expect(kecamatan.body.meta.sebaran_partai).toEqual({
+            status: 'tidak_sesuai',
+            suara_dapil: 100,
+            suara_wilayah: 200,
+            kelebihan: 100,
+            persen_kelebihan: 100,
+            batas_persen: 1,
+        });
+        // The roll stays; the votes do not.
+        expect(kecamatan.body.data).toEqual([
+            {
+                kode_kecamatan: '700104',
+                nama_kecamatan: 'KEC EMPAT',
+                data_tersedia: false,
+                jumlah_kelurahan_berdata: 0,
+                suara_partai: null,
+                total_suara_sah: null,
+                persen_suara: null,
+                partai_unggul: null,
+                partai: [],
+                dpt: { dpt: 150, di_bawah_30: 60 },
+            },
+        ]);
+        const kelurahan = await json(`${base}/kelurahan?partai=pan&kecamatan=700104`);
+        expect(kelurahan.body.meta.sebaran_partai.status).toBe('tidak_sesuai');
+        expect(kelurahan.body.data).toHaveLength(1);
+        expect(kelurahan.body.data[0]).toMatchObject({
+            kode_kelurahan: '7001041001',
+            data_tersedia: false,
+            suara_partai: null,
+            partai: [],
+        });
+        const room = await json(`${base}/ruang-suara?partai=pan`);
+        expect(room.body.data).toEqual([]);
+        expect(room.body.meta).toMatchObject({ total_ruang_suara: 0, sebaran_partai: { status: 'tidak_sesuai' } });
+        const levels = await json(`${base}/lintas-tingkat?partai=pan`);
+        expect(levels.body.data[0].tingkat.dprd_kabupaten_kota).toBeNull();
+        expect(levels.body.meta.kecamatan_tidak_sesuai).toEqual({
+            dpr_ri: 0,
+            dprd_provinsi: 0,
+            dprd_kabupaten_kota: 1,
+        });
+        // The candidate's own votes pass their check; only the party's side is left out.
+        const spread = await json(`${base}/caleg/pan/1/wilayah`);
+        expect(spread.body.meta.sebaran_partai.status).toBe('tidak_sesuai');
+        expect(spread.body.data).toMatchObject({ pemenang_ditandai: false });
+        expect(spread.body.data.wilayah).toEqual([
+            {
+                kode_kecamatan: '700104',
+                nama_kecamatan: 'KEC EMPAT',
+                data_tersedia: true,
+                suara: 30,
+                suara_partai: null,
+                persen_dari_partai: null,
+            },
+        ]);
+        // A dapil whose kelurahan agree is untouched.
+        const fine = await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/kecamatan?partai=pan');
+        expect(fine.body.meta.sebaran_partai.status).toBe('sesuai');
+        const fineLevels = await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/lintas-tingkat?partai=pan');
+        expect(fineLevels.body.meta.kecamatan_tidak_sesuai).toEqual({
+            dpr_ri: 0,
+            dprd_provinsi: 0,
+            dprd_kabupaten_kota: 0,
+        });
+    });
+
+    it('says when a dapil marks no winner instead of calling everyone unseated', async () => {
+        const caleg = await json('/v1/2024/dprd_kabupaten_kota/dapil/700004/caleg');
+        expect(caleg.body.meta).toMatchObject({ data_lengkap: true, pemenang_ditandai: false });
+        expect(caleg.body.data.tokoh_menonjol).toBeNull();
+        const contest = await json('/v1/2024/dprd_kabupaten_kota/dapil/700004/persaingan');
+        expect(contest.body.data.pemenang_ditandai).toBe(false);
+        const pan = contest.body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'pan');
+        expect(pan.caleg_teratas).toMatchObject({ nama: 'CALEG EMPAT', terpilih: null });
+        const marked = await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/persaingan');
+        expect(marked.body.data.pemenang_ditandai).toBe(true);
     });
 });

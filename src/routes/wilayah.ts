@@ -16,7 +16,7 @@ import {
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, fields, optionalParty, parseParams } from '../http/params';
-import { checkSpread, toleratedVotes } from '../service/sebaran';
+import { checkPartySpread, checkSpread, toleratedVotes } from '../service/sebaran';
 import { TINGKAT_NAMES } from '../tingkat';
 
 const ONLY_2024 = 'Data kelurahan dan kecamatan';
@@ -130,7 +130,9 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
                 },
             ]),
         );
-        const votes = group(found.votes, (row) => String(row.kode_kecamatan));
+        const check = checkPartySpread(found.partyVotes, found.partyAreas);
+        // Kelurahan that give the parties more votes than the dapil are not shown as votes at all.
+        const votes = group(check.status === 'tidak_sesuai' ? [] : found.votes, (row) => String(row.kode_kecamatan));
         const kelurahan = new Map(found.kelurahanCounts.map((row) => [String(row.kode_kecamatan), row.jumlah]));
         let fromKelurahan = 0;
         let withoutData = 0;
@@ -168,6 +170,9 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             suara_partai_dari_kelurahan: fromKelurahan,
             suara_partai_dapil: found.dapilVotes,
             selisih: found.dapilVotes === null ? null : found.dapilVotes - fromKelurahan,
+            // `tidak_sesuai`: the source repeats party votes in this dapil's kelurahan, so every kecamatan
+            // is returned without votes. The voter roll is not affected.
+            sebaran_partai: check,
         });
     });
 
@@ -188,12 +193,15 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         if (found.namaKecamatan === null) {
             throw notFound('kecamatan-tidak-ditemukan', `Kecamatan ${kecamatan} tidak termasuk dapil ${kode_dapil}.`);
         }
-        const votes = group(found.votes, (row) => row.kode_kelurahan);
+        const check = checkPartySpread(found.partyVotes, found.partyAreas);
+        const votes = group(check.status === 'tidak_sesuai' ? [] : found.votes, (row) => row.kode_kelurahan);
         const dpt = new Map(found.dpt.map((row) => [row.kode_kelurahan, row]));
         const elsewhere = new Set(found.elsewhere);
         // The voter roll names every kelurahan of the kecamatan; those that vote in another dapil are left out.
-        const codes = [...new Set([...dpt.keys(), ...votes.keys()])]
-            .filter((kode) => votes.has(kode) || !elsewhere.has(kode))
+        // Which kelurahan belong here is told by the rows themselves, withheld or not.
+        const present = new Set(found.votes.map((row) => row.kode_kelurahan));
+        const codes = [...new Set([...dpt.keys(), ...present])]
+            .filter((kode) => present.has(kode) || !elsewhere.has(kode))
             .sort((a, b) => a - b);
         let withoutData = 0;
         const data = codes.map((kode) => {
@@ -229,6 +237,7 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             kelurahan_tanpa_data: withoutData,
             // Other dapil that share this kecamatan. A kelurahan without data may belong to one of them.
             dapil_lain: found.holders.filter((holder) => holder !== kode_dapil).map(String),
+            sebaran_partai: check,
         });
     });
 
@@ -246,13 +255,42 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         if (found.dapil === null) {
             throw dapilNotFound(tingkat, kode_dapil, pemilu);
         }
+        // A kecamatan is left out at a level when a dapil that holds it there has repeated party votes.
+        const withheld = new Map(
+            TINGKAT_NAMES.map((level) => {
+                const holders = found.holders.get(level);
+                const dapilVotes = group(holders?.dapilVotes ?? [], (row) => row.kode_dapil);
+                const areaVotes = group(holders?.areaVotes ?? [], (row) => row.kode_dapil);
+                const failing = new Set(
+                    [...areaVotes.keys()].filter(
+                        (kode) =>
+                            checkPartySpread(dapilVotes.get(kode) ?? [], areaVotes.get(kode) ?? []).status ===
+                            'tidak_sesuai',
+                    ),
+                );
+                return [
+                    level,
+                    new Set(
+                        (holders?.kecamatan ?? [])
+                            .filter((row) => failing.has(row.kode_dapil))
+                            .map((row) => row.kode_kecamatan),
+                    ),
+                ];
+            }),
+        );
+        const withheldCount = Object.fromEntries(TINGKAT_NAMES.map((level) => [level, 0]));
         const data = found.kecamatan.map((kecamatan) => ({
             kode_kecamatan: kecamatan.kode_kecamatan,
             nama_kecamatan: kecamatan.nama_kecamatan,
-            // Null where the level has no kelurahan votes for the kecamatan, or no such council at all.
+            // Null where the level has no kelurahan votes for the kecamatan, no such council at all, or
+            // votes the source repeats.
             tingkat: Object.fromEntries(
                 TINGKAT_NAMES.map((level) => {
                     const votes = found.votes.get(level)?.get(kecamatan.kode_kecamatan);
+                    if (votes !== undefined && withheld.get(level)?.has(kecamatan.kode_kecamatan)) {
+                        withheldCount[level] = (withheldCount[level] ?? 0) + 1;
+                        return [level, null];
+                    }
                     return [
                         level,
                         votes === undefined || votes.total <= 0
@@ -273,6 +311,8 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             nama_dapil: found.dapil.nama_dapil,
             partai,
             jumlah_kecamatan: data.length,
+            // Per level: the kecamatan left out because the source repeats party votes there.
+            kecamatan_tidak_sesuai: withheldCount,
         });
     });
 
@@ -291,7 +331,9 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         if (found.dapil === null) {
             throw dapilNotFound(tingkat, kode_dapil, pemilu);
         }
-        const counted = found.kelurahan.filter((row) => row.total > 0);
+        const check = checkPartySpread(found.partyVotes, found.partyAreas);
+        // Repeated party votes would double the room: such a dapil has none to report.
+        const counted = check.status === 'tidak_sesuai' ? [] : found.kelurahan.filter((row) => row.total > 0);
         let partyVotes = 0;
         let validVotes = 0;
         for (const row of counted) {
@@ -338,6 +380,7 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             jumlah_kelurahan_berdata: counted.length,
             jumlah_kelurahan_di_bawah_patokan: data.length,
             total_ruang_suara: totalRoom,
+            sebaran_partai: check,
         });
     });
 
@@ -474,8 +517,12 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         // A dapil can pass while one candidate in it carries repeated votes, so the candidate is held to the
         // same tolerance.
         const shown = check.status === 'sesuai' && recorded <= toleratedVotes(candidate.suara);
+        const partyCheck = checkPartySpread(found.dapilPartyVotes, found.dapilPartyAreas);
         const own = new Map(found.candidateVotes.map((row) => [row.kode, row]));
-        const partyVotes = new Map(found.partyVotes.map((row) => [row.kode, row]));
+        // Party votes the source repeats are left out; the candidate's own are judged by their own check.
+        const partyVotes = new Map(
+            (partyCheck.status === 'tidak_sesuai' ? [] : found.partyVotes).map((row) => [row.kode, row]),
+        );
         let areas = null;
         if (shown && inside === null) {
             areas = found.kecamatan.map((row) => {
@@ -505,6 +552,8 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
                 suara: candidate.suara,
                 kursi_ke: candidate.kursi_ke,
             },
+            // False when the dapil marks no winner at all, so `caleg.kursi_ke` 0 says nothing.
+            pemenang_ditandai: found.candidates.some((row) => row.kursi_ke > 0),
             // The candidate's votes summed over the areas, to set beside `caleg.suara`. Null without area rows.
             suara_tercatat: check.status === 'tidak_tersedia' ? null : recorded,
             // Null when the areas do not agree with the dapil totals, or there are none: see `meta.sebaran_wilayah`.
@@ -519,6 +568,7 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             kode_kecamatan: inside?.kode_kecamatan ?? null,
             nama_kecamatan: inside?.nama_kecamatan ?? null,
             sebaran_wilayah: check,
+            sebaran_partai: partyCheck,
         });
     });
 }

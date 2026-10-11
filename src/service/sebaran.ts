@@ -74,3 +74,55 @@ export function checkSpread(
         batas_persen: SPREAD_TOLERANCE * 100,
     };
 }
+
+export interface PartyTotal {
+    partai_id: number;
+    suara: number;
+}
+
+/** The same check for party votes, which reach kelurahan at every level. */
+export interface PartySpreadCheck {
+    status: SpreadStatus;
+    suara_dapil: number;
+    suara_wilayah: number;
+    /** Votes the kelurahan give parties above their own dapil totals, summed over the parties. */
+    kelebihan: number;
+    persen_kelebihan: number | null;
+    batas_persen: number;
+}
+
+/**
+ * Party votes per kelurahan are repeated in places too: in 58 dprd_provinsi dapil every kelurahan carries
+ * exactly double. Each party's votes summed over the kelurahan of the dapil are held against its dapil total,
+ * by the rule of `checkSpread`.
+ */
+export function checkPartySpread(
+    dapilVotes: readonly PartyTotal[],
+    areaTotals: readonly PartyTotal[],
+): PartySpreadCheck {
+    const inAreas = new Map(areaTotals.map((row) => [row.partai_id, row.suara]));
+    let dapil = 0;
+    let excess = 0;
+    for (const row of dapilVotes) {
+        dapil += row.suara;
+        excess += Math.max(0, (inAreas.get(row.partai_id) ?? 0) - row.suara);
+        inAreas.delete(row.partai_id);
+    }
+    for (const votes of inAreas.values()) {
+        excess += votes;
+    }
+    const areas = areaTotals.reduce((sum, row) => sum + row.suara, 0);
+    const checkable = dapil > 0 && areas > 0;
+    let status: SpreadStatus = 'tidak_tersedia';
+    if (checkable) {
+        status = excess <= dapil * SPREAD_TOLERANCE ? 'sesuai' : 'tidak_sesuai';
+    }
+    return {
+        status,
+        suara_dapil: dapil,
+        suara_wilayah: areas,
+        kelebihan: excess,
+        persen_kelebihan: checkable ? round2((excess / dapil) * 100) : null,
+        batas_persen: SPREAD_TOLERANCE * 100,
+    };
+}

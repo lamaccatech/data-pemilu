@@ -80,9 +80,9 @@ returned as strings.
 | 16 | `GET /v1/:pemilu/:tingkat/persaingan?provinsi=&kabupaten=` | Every dapil of a level with every party's votes and seats, and `pemegang_kursi_terakhir`: enough to draw the leading party or one party against another on a map. Takes no `partai`. Region filters are 2024 only |
 | 17 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/lintas-tingkat?partai=` | One party in every kecamatan of the dapil at all three levels (`dpr_ri`, `dprd_provinsi`, `dprd_kabupaten_kota`): its votes, the valid votes and its share. A kecamatan is read whole at every level, also where two dapil of a level share it. A level without kelurahan votes there is null |
 | 18 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/ruang-suara?partai=` | The kelurahan where the party polled under its own average in the dapil, largest `ruang_suara` first: valid votes there times the gap between the party's share over the dapil's kelurahan (`meta.persen_patokan`) and its share there. With the leading party and the voter roll (`dpt`, `di_bawah_30`). A benchmark against the party's own result, not a forecast |
-| 16 | `GET /v1/2024/dpt` | Every kelurahan's registered voters: `kode_kelurahan` and `dpt`. `meta.total_dpt` is the national sum. 2019 returns 404 `tidak-tersedia` |
-| 17 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/dpt` | The dapil's registered voters: total, gender, seven age bands, and each kecamatan's total. A kelurahan that votes in another dapil is left out. 2019 returns 404 `tidak-tersedia` |
-| 18 | `GET /v1/2024/provinsi/:kode/dpt` | The province's registered voters: total, gender and seven age bands, summed from kelurahan codes that start with the province. 2019 returns 404 `tidak-tersedia`. A code with no roll returns 404 `provinsi-tidak-ditemukan` |
+| 24 | `GET /v1/2024/dpt` | Every kelurahan's registered voters: `kode_kelurahan` and `dpt`. `meta.total_dpt` is the national sum. 2019 returns 404 `tidak-tersedia` |
+| 25 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/dpt` | The dapil's registered voters: total, gender, seven age bands, and each kecamatan's total. A kelurahan that votes in another dapil is left out. 2019 returns 404 `tidak-tersedia` |
+| 26 | `GET /v1/2024/provinsi/:kode/dpt` | The province's registered voters: total, gender and seven age bands, summed from kelurahan codes that start with the province. 2019 returns 404 `tidak-tersedia`. A code with no roll returns 404 `provinsi-tidak-ditemukan` |
 | 19 | `GET /v1/2024/dpt/nasional` | The same figures for the whole country |
 | 20 | `GET /v1/2024/dpt/provinsi` | Each province's total and how many are under 30 |
 | 21 | `GET /v1/2024/:tingkat/provinsi/:kode/dpt` | Each dapil of a province: total and how many are under 30. A kelurahan that votes in another dapil is left out |
@@ -153,6 +153,19 @@ in the same order as endpoint 2 with the same `provinsi`, so the two join on `ko
   when the dapil has no rows below it or no candidate totals to hold them against. Fewer votes in the areas
   than in the dapil is a gap, not a fault, and passes.
 
+- `sebaran_partai`: the same check for party votes per kelurahan, in `meta` of endpoints 5, 6, 18 and 23: each
+  party's votes summed over the kelurahan of the dapil against its dapil votes, with the same 1% limit. Where
+  it is `tidak_sesuai`, endpoints 5 and 6 return every kecamatan and kelurahan with `data_tersedia: false`
+  and no votes (the voter roll stays), endpoint 18 returns no rows and a total of zero, and endpoint 23
+  returns `suara_partai: null`. Endpoint 17 reads three levels, so it checks every dapil that holds one of
+  its kecamatan at each level, returns null for that kecamatan at that level, and counts them per level in
+  `meta.kecamatan_tidak_sesuai`.
+- `pemenang_ditandai` (`meta` of endpoint 4, `data` of endpoints 15 and 23): false when no candidate of the
+  dapil has `kursi_ke` above zero. `kursi_ke` 0 then says nothing about who was elected. Endpoint 4 returns
+  `tokoh_menonjol: null` there, because the strongest "unseated" candidates would be the winners themselves,
+  and endpoint 15 returns `caleg_teratas.terpilih: null`. The same goes for `pemilu_2019.terpilih` when the
+  2019 dapil marks no winner.
+
 ### Gaps the API reports
 
 Missing data is reported, never filled in.
@@ -185,6 +198,18 @@ Served as they are; fix them in the export, not here.
   SUMATERA SELATAN I, KALIMANTAN SELATAN II, NUSA TENGGARA TIMUR I and SULAWESI TENGGARA. Of the 310, 107
   have kelurahan rows but no candidate votes at dapil level. Endpoint 23 withholds what does not pass.
   Endpoints 7 and 8 serve the rows as they are: ask endpoint 4 for the check before trusting them.
+- **Party votes per kelurahan are repeated in places.** In 58 `dprd_provinsi` dapil (Aceh, Sumatera Utara,
+  Sumatera Barat, Riau, Jambi, Sumatera Selatan, Maluku Utara and others) every kelurahan value in
+  `kelurahan_suara_partai_2024.csv` is even and the sums are twice the dapil votes: PAN in ACEH 7 has 28,714
+  votes in the dapil and 57,436 over its kelurahan. 41 `dprd_kabupaten_kota` and 3 `dpr_ri` dapil
+  (NUSA TENGGARA TIMUR I, KALIMANTAN SELATAN II, SULAWESI TENGGARA) fail the same check by less. The
+  `sebaran_partai` check withholds them; correct the export to bring them back.
+- **Some dapil mark no winner.** 65 `dprd_kabupaten_kota` dapil of 2024 and 11 of 2019 have party votes and
+  candidates, and no candidate with a seat. See `pemenang_ditandai`.
+- **A kecamatan shared by two `dprd_kabupaten_kota` dapil is divided by which kelurahan have votes where.**
+  Where one side has no kelurahan votes the roll goes wholly to the other (20 dapil have no roll, and their
+  neighbour has too much), and where neither side has any, both get the whole kecamatan (three kecamatan in
+  Papua, 195,291 voters counted twice). Not corrected yet.
 - `kelurahan_suara_caleg_2024.csv` has 2,058 rows (kabupaten 9110) whose `kode_dapil` is `#N/A`. `build-sql`
   restores it from the kecamatan of the kelurahan, which names exactly one dapil (9101), and prints the count.
 - `nama_kabupaten` is empty for every 2024 `dprd_kabupaten_kota` dapil.

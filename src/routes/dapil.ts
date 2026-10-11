@@ -15,7 +15,8 @@ import { TINGKAT, TINGKAT_NAMES, type Tingkat } from '../tingkat';
 interface Earlier2019 {
     suara: number;
     kode_partai: string;
-    terpilih: boolean;
+    /** Null when the 2019 dapil marks no winner at all, so "elected then" cannot be told. */
+    terpilih: boolean | null;
 }
 
 /**
@@ -40,6 +41,7 @@ async function candidatesIn2019ByName(
     if (before.dapil === null) {
         return null;
     }
+    const winnersMarked = before.candidates.some((row) => row.kursi_ke > 0);
     const found = new Map<string, Earlier2019>();
     for (const row of before.candidates) {
         const name = normalizePersonName(row.nama);
@@ -47,7 +49,7 @@ async function candidatesIn2019ByName(
             found.set(name, {
                 suara: row.suara,
                 kode_partai: partyCode(election2019, row.partai_id),
-                terpilih: row.kursi_ke > 0,
+                terpilih: winnersMarked ? row.kursi_ke > 0 : null,
             });
         }
     }
@@ -299,8 +301,12 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 // The same name in the comparable 2019 dapil, whatever party it stood for then.
                 pemilu_2019: before?.get(normalizePersonName(row.nama)) ?? null,
             }));
+        // Some dapil mark no winner at all. There every candidate reads as unseated, so the strongest
+        // "unseated" ones would be the winners themselves: nobody is named.
+        const winnersMarked = candidates.some((row) => row.kursi_ke > 0);
         // Without party votes the shares cannot be worked out, as in the reference.
-        const standouts = complete ? findStandouts(votesByParty, candidates, party?.partai_id ?? null) : null;
+        const standouts =
+            complete && winnersMarked ? findStandouts(votesByParty, candidates, party?.partai_id ?? null) : null;
         const tokohMenonjol =
             standouts === null
                 ? null
@@ -320,6 +326,9 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 partai: partai ?? null,
                 jumlah_caleg: caleg.length,
                 data_lengkap: complete,
+                // False when the source marks no winner in this dapil: `kursi_ke` 0 then says nothing, and
+                // `tokoh_menonjol` is null.
+                pemenang_ditandai: winnersMarked,
                 // False when no 2019 dapil is comparable, so an empty `pemilu_2019` there says nothing.
                 padanan_2019_tersedia: before !== null,
                 // Whether candidate votes below dapil level can be trusted here. Null for 2019, which has none.
@@ -356,6 +365,9 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
             jumlah_kursi: dapil.jumlah_kursi,
             total_suara_sah: competition === null ? null : votes.reduce((sum, row) => sum + row.suara, 0),
             data_lengkap: competition !== null,
+            // False when the source marks no winner: `caleg_terpilih` is then empty for every party and
+            // `caleg_teratas.terpilih` null, which is not the same as nobody elected.
+            pemenang_ditandai: candidates.some((row) => row.kursi_ke > 0),
             harga_kursi_terakhir: lastWinning === null ? null : Math.ceil(lastWinning.suara / lastWinning.pembagi),
             padanan_2019: before?.padanan ?? null,
             partai: competition?.partai ?? [],
