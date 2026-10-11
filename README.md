@@ -20,7 +20,7 @@ Requirements: Node 22 or newer and pnpm.
 ```sh
 pnpm install
 pnpm build-sql      # CSV -> data/sql/<database>/<table>-NNNN.sql, about 50 s
-pnpm build-geo      # downloads the province outlines once -> data/geo/<pemilu>/provinsi.geojson
+pnpm build-geo      # province outlines (downloaded once) and 2024 dapil outlines -> data/geo/, about 30 s
 pnpm load-local     # migrations and SQL files into the local D1, boundary files into the local R2, about 90 s
 pnpm verify         # row counts, threshold lists, the ACEH I example, database sizes
 echo 'API_KEYS={"kunci-lokal":"lokal"}' > .dev.vars
@@ -73,6 +73,7 @@ returned as strings.
 | 9 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/padanan?partai=` | The matching 2019 dapil and, when comparable, the 2019 figures for the same party |
 | 10 | `GET /v1/2024/dapil-alias` | Applications' own dapil names mapped to `kode_dapil` |
 | 11 | `GET /v1/:pemilu/batas/provinsi` | Province boundaries at that election, as a GeoJSON `FeatureCollection` in `data` |
+| 12 | `GET /v1/2024/:tingkat/batas/dapil?provinsi=&kabupaten=` | Dapil outlines of one province, optionally one kabupaten. `provinsi` is required |
 
 Error codes: `tidak-berwenang` (401), `parameter-tidak-valid` (400, also for unknown query parameters),
 `pemilu-tidak-ditemukan`, `partai-tidak-ditemukan`, `dapil-tidak-ditemukan`, `kecamatan-tidak-ditemukan`,
@@ -99,6 +100,25 @@ digits of a 2019 `dpr_ri` `kode_dapil` are the province.
   both. Show one election at a time.
 - 407 KB for 2024 and 290 KB for 2019, coordinates to four decimals (roughly 10 m). For display, not for
   settling where a border runs.
+
+#### Dapil outlines
+
+Endpoint 12 is for drawing the dapil of a province once it is chosen on the map. Each feature has
+`kode_dapil`, `nama_dapil`, `kode_provinsi`, `kode_kabupaten`, `jumlah_kursi` and `kecamatan_tanpa_batas`,
+in the same order as endpoint 2 with the same `provinsi`, so the two join on `kode_dapil`.
+
+- A dapil outline is the union of its kecamatan shapes from `~/data/bedah-dapil/geo/` (override with
+  `PEMILU_GEO_DIR`). They are a different survey from the province outlines, so a dapil can overhang its
+  province by a hair at the coast.
+- 2024 only. Nothing lists which kecamatan made up a 2019 dapil.
+- 84 `dpr_ri`, 301 `dprd_provinsi` and 2,325 `dprd_kabupaten_kota` dapil. DKI Jakarta has no kabupaten/kota
+  councils, so `dprd_kabupaten_kota` with `provinsi=31` is a 404.
+- `kecamatan_tanpa_batas` counts kecamatan without a shape; the outline has a hole or a notch there. That
+  affects 5 `dpr_ri`, 7 `dprd_provinsi` and 14 `dprd_kabupaten_kota` dapil. The overseas polling places of
+  DKI JAKARTA II are not counted and not drawn.
+- 26 `dprd_kabupaten_kota` dapil have `geometry: null`. Each consists of one kecamatan that the data also
+  gives to a neighbouring dapil, and no kelurahan votes say which part is whose. Kecamatan shared by two
+  dapil are otherwise divided by kelurahan, each going to the dapil it has votes in.
 
 ### Classification
 
@@ -178,11 +198,11 @@ done
 # 4. Check the counts against the table above, for example:
 pnpm exec wrangler d1 execute pemilu2024 --remote --command 'SELECT COUNT(*) FROM kelurahan_suara_caleg'
 
-# 5. Boundary files. Run `pnpm build-geo` first.
+# 5. Boundary files: 115 objects, about 13 MB. Run `pnpm build-geo` first.
 pnpm exec wrangler r2 bucket create data-pemilu-batas
-for pemilu in 2024 2019; do
-    pnpm exec wrangler r2 object put "data-pemilu-batas/$pemilu/provinsi.geojson" --remote \
-        --file "data/geo/$pemilu/provinsi.geojson" --content-type application/geo+json
+(cd data/geo && find 2024 2019 -name '*.geojson') | while read -r key; do
+    pnpm exec wrangler r2 object put "data-pemilu-batas/$key" --remote \
+        --file "data/geo/$key" --content-type application/geo+json || break
 done
 
 # 6. API keys: a JSON object mapping key to client label, for example {"<random key>":"pan"}.
@@ -213,6 +233,5 @@ Cache API only works on a custom domain; on `*.workers.dev` every request is com
 
 ## Later
 
-Only province boundaries are built. Two more sets are at hand: kabupaten/kota outlines in the same two
-repositories (2024 and 2019), and every kecamatan and kelurahan shape in `~/data/bedah-dapil/geo/` (188 MB), from which dapil
-outlines could be made as the union of each dapil's kecamatan.
+Not built: kabupaten/kota outlines (both province sources also publish them), kecamatan and kelurahan
+outlines for drilling into a dapil (the shapes are in `~/data/bedah-dapil/geo/`), and 2019 dapil outlines.

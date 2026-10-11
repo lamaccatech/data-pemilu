@@ -42,3 +42,50 @@ describe('GET /v1/:pemilu/batas/provinsi', () => {
         expect((await json('/v1/2014/batas/provinsi')).body.error.code).toBe('pemilu-tidak-ditemukan');
     });
 });
+
+describe('GET /v1/2024/:tingkat/batas/dapil', () => {
+    const dapil = (kode: string, kabupaten: string | null) => ({
+        type: 'Feature',
+        properties: { kode_dapil: kode, nama_dapil: `UJI ${kode}`, kode_provinsi: '11', kode_kabupaten: kabupaten },
+        geometry: {
+            type: 'Polygon',
+            coordinates: [
+                [
+                    [95, 5],
+                    [96, 5],
+                    [96, 6],
+                    [95, 5],
+                ],
+            ],
+        },
+    });
+
+    it('returns the dapil outlines of one province', async () => {
+        const stored = { type: 'FeatureCollection', features: [dapil('1101', null), dapil('1102', null)] };
+        await env.GEO.put('2024/dapil/dpr_ri/11.geojson', JSON.stringify(stored));
+        const { status, body } = await json('/v1/2024/dpr_ri/batas/dapil?provinsi=11');
+        expect(status).toBe(200);
+        expect(body).toEqual({
+            data: stored,
+            meta: { pemilu: '2024', tingkat: 'dpr_ri', provinsi: '11', kabupaten: null },
+        });
+    });
+
+    it('narrows to one kabupaten', async () => {
+        const stored = { type: 'FeatureCollection', features: [dapil('110101', '1101'), dapil('110201', '1102')] };
+        await env.GEO.put('2024/dapil/dprd_kabupaten_kota/11.geojson', JSON.stringify(stored));
+        const { body } = await json('/v1/2024/dprd_kabupaten_kota/batas/dapil?provinsi=11&kabupaten=1102');
+        expect(
+            body.data.features.map((feature: { properties: { kode_dapil: string } }) => feature.properties.kode_dapil),
+        ).toEqual(['110201']);
+        expect(body.meta.kabupaten).toBe('1102');
+    });
+
+    it('requires a province, and has nothing for 2019 or an unknown province', async () => {
+        expect((await json('/v1/2024/dpr_ri/batas/dapil')).body.error.code).toBe('parameter-tidak-valid');
+        expect((await json('/v1/2019/dpr_ri/batas/dapil?provinsi=11')).body.error.code).toBe('tidak-tersedia');
+        const unknown = await json('/v1/2024/dpr_ri/batas/dapil?provinsi=10');
+        expect(unknown.status).toBe(404);
+        expect(unknown.body.error.code).toBe('batas-tidak-ditemukan');
+    });
+});

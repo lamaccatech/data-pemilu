@@ -11,7 +11,7 @@
         "format": "biome check --write",
         "typecheck": "tsc --noEmit",
         "build-sql": "tsx scripts/build-sql.ts",
-        "build-geo": "tsx scripts/build-geo.ts",
+        "build-geo": "tsx scripts/build-geo.ts && tsx scripts/build-dapil-geo.ts",
         "load-local": "tsx scripts/load-local.ts",
         "verify": "tsx scripts/verify.ts"
     },
@@ -25,6 +25,7 @@
         "@cloudflare/workers-types": "^5.20261010.1",
         "@types/node": "^26.6.5",
         "csv-parse": "^7.0.3",
+        "mapshaper": "^0.7.83",
         "tsx": "^4.23.15",
         "typescript": "^7.0.2",
         "vitest": "^4.1.0",
