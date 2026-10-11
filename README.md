@@ -8,8 +8,10 @@ different party, so nothing here assumes a particular party: every endpoint take
 - Calculations (Sainte-Laguë seats, targets, `kuadran`, `peluang_dekat`) run in the Worker at request time.
   Nothing derived is stored. `src/calc/` is a port of `reference/reference_calc.py` and must reproduce
   `reference/fixtures.json`.
-- Election data is never committed. It is read from `~/data/bedah-dapil/export/` (override with
-  `PEMILU_EXPORT_DIR`), and generated SQL goes to `data/`, which git ignores.
+- Boundary files sit in one R2 bucket, `data-pemilu-batas` (binding `GEO`).
+- Election data and boundary files are never committed. They are read from `~/data/bedah-dapil/export/` and
+  `~/data/bedah-dapil/geo/` (override with `PEMILU_EXPORT_DIR` and `PEMILU_GEO_DIR`), and everything
+  generated goes to `data/`, which git ignores.
 
 ## Run it locally
 
@@ -18,7 +20,8 @@ Requirements: Node 22 or newer and pnpm.
 ```sh
 pnpm install
 pnpm build-sql      # CSV -> data/sql/<database>/<table>-NNNN.sql, about 50 s
-pnpm load-local     # migrations and SQL files into the local D1, about 90 s
+pnpm build-geo      # kecamatan shapes -> data/geo/<pemilu>/provinsi.geojson, about 10 s
+pnpm load-local     # migrations and SQL files into the local D1, boundary files into the local R2, about 90 s
 pnpm verify         # row counts, threshold lists, the ACEH I example, database sizes
 echo 'API_KEYS={"kunci-lokal":"lokal"}' > .dev.vars
 pnpm dev
@@ -69,10 +72,24 @@ returned as strings.
 | 8 | `GET /v1/2024/dprd_provinsi/dapil/:kode_dapil/kecamatan/:kode_kecamatan/caleg?partai=` | Candidate votes in a kecamatan |
 | 9 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/padanan?partai=` | The matching 2019 dapil and, when comparable, the 2019 figures for the same party |
 | 10 | `GET /v1/2024/dapil-alias` | Applications' own dapil names mapped to `kode_dapil` |
+| 11 | `GET /v1/:pemilu/batas/provinsi` | Province boundaries at that election, as a GeoJSON `FeatureCollection` in `data` |
 
 Error codes: `tidak-berwenang` (401), `parameter-tidak-valid` (400, also for unknown query parameters),
 `pemilu-tidak-ditemukan`, `partai-tidak-ditemukan`, `dapil-tidak-ditemukan`, `kecamatan-tidak-ditemukan`,
 `kelurahan-tidak-ditemukan`, `tidak-tersedia`, `tidak-ditemukan` (all 404), `data-belum-dimuat` (503).
+
+### Boundaries
+
+`data` of endpoint 11 goes straight into a map source. Each feature has `kode_provinsi`, `nama_provinsi` and
+`kecamatan_tanpa_batas`. Join it to endpoint 2 on `kode_provinsi`; the 2019 dapil rows carry no province
+code, but the first two digits of a 2019 `dpr_ri` `kode_dapil` are the province.
+
+- 2024 has 38 provinces, 2019 has 34. Papua Selatan, Papua Tengah and Papua Pegunungan were part of Papua in
+  2019, and Papua Barat Daya was part of Papua Barat.
+- A province is the union of its kecamatan shapes, with outlines thinned for a country-wide map (about
+  250 KB per election) and islands under 3 km2 dropped. They are for display, not for measuring.
+- `kecamatan_tanpa_batas` counts kecamatan that have no shape, so the outline may fall short there:
+  24 in Papua Barat Daya, 7 in Sulawesi Selatan, 1 each in Sulawesi Utara and Papua Tengah.
 
 ### Classification
 
@@ -152,10 +169,17 @@ done
 # 4. Check the counts against the table above, for example:
 pnpm exec wrangler d1 execute pemilu2024 --remote --command 'SELECT COUNT(*) FROM kelurahan_suara_caleg'
 
-# 5. API keys: a JSON object mapping key to client label, for example {"<random key>":"pan"}.
+# 5. Boundary files. Run `pnpm build-geo` first.
+pnpm exec wrangler r2 bucket create data-pemilu-batas
+for pemilu in 2024 2019; do
+    pnpm exec wrangler r2 object put "data-pemilu-batas/$pemilu/provinsi.geojson" --remote \
+        --file "data/geo/$pemilu/provinsi.geojson" --content-type application/geo+json
+done
+
+# 6. API keys: a JSON object mapping key to client label, for example {"<random key>":"pan"}.
 pnpm exec wrangler secret put API_KEYS
 
-# 6. Deploy.
+# 7. Deploy.
 pnpm exec wrangler deploy
 ```
 
@@ -180,6 +204,6 @@ Cache API only works on a custom domain; on `*.workers.dev` every request is com
 
 ## Later
 
-Boundary files (`~/data/bedah-dapil/geo/`) are out of scope. Proposal: put them in an R2 bucket bound to this
-Worker and serve them from a route such as `/v1/2024/batas/:tingkat/:kode_dapil` behind the same key check,
-streaming the object with a long cache lifetime. Nothing for this is built.
+Only province boundaries are built. The supplied files also hold every kecamatan and kelurahan shape
+(`~/data/bedah-dapil/geo/`, 188 MB), which could feed three more layers in the same bucket: dapil outlines
+(the union of each dapil's kecamatan), the kecamatan of one dapil, and the kelurahan of one kecamatan.

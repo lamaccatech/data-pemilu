@@ -3,6 +3,7 @@ import { ApiError } from './errors';
 import { authenticate } from './http/auth';
 import { cacheResponses } from './http/cache';
 import type { AppEnv } from './http/context';
+import { registerBatasRoutes } from './routes/batas';
 import { registerDapilRoutes } from './routes/dapil';
 import { registerWilayahRoutes } from './routes/wilayah';
 
@@ -11,6 +12,7 @@ export const app = new Hono<AppEnv>();
 app.get('/healthz', (c) => c.json({ data: { status: 'ok' }, meta: {} }));
 
 app.use('/v1/*', authenticate, cacheResponses);
+registerBatasRoutes(app);
 registerDapilRoutes(app);
 registerWilayahRoutes(app);
 

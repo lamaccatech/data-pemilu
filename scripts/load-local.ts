@@ -5,7 +5,8 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATABASES, MANIFEST_PATH, type Manifest, SQL_DIR } from './tables';
+import { PEMILU } from '../src/tingkat';
+import { DATABASES, GEO_BUCKET, GEO_DIR, MANIFEST_PATH, type Manifest, SQL_DIR } from './tables';
 
 function wrangler(args: string[]): void {
     try {
@@ -30,6 +31,26 @@ function main() {
             wrangler(['d1', 'execute', database, '--local', '--yes', '--file', path.join(SQL_DIR, file)]);
             console.log(`${database}: ${file} (${((Date.now() - started) / 1000).toFixed(1)} s)`);
         }
+    }
+    for (const pemilu of PEMILU) {
+        const key = `${pemilu}/provinsi.geojson`;
+        const file = path.join(GEO_DIR, key);
+        if (!fs.existsSync(file)) {
+            console.log(`${GEO_BUCKET}: ${key} not built, skipped. Run \`pnpm build-geo\` first.`);
+            continue;
+        }
+        wrangler([
+            'r2',
+            'object',
+            'put',
+            `${GEO_BUCKET}/${key}`,
+            '--local',
+            '--file',
+            file,
+            '--content-type',
+            'application/geo+json',
+        ]);
+        console.log(`${GEO_BUCKET}: ${key}`);
     }
     console.log('\nDone. Run `pnpm verify` to check the result.');
 }

@@ -18,5 +18,7 @@
             "database_id": "00000000-0000-0000-0000-000000002019",
             "migrations_dir": "migrations/2019"
         }
-    ]
+    ],
+    // Boundary files built by `pnpm build-geo`, named <pemilu>/<wilayah>.geojson.
+    "r2_buckets": [{ "binding": "GEO", "bucket_name": "data-pemilu-batas" }]
 }
