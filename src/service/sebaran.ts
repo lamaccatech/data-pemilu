@@ -126,3 +126,34 @@ export function checkPartySpread(
         batas_persen: SPREAD_TOLERANCE * 100,
     };
 }
+
+export interface HolderTotal extends PartyTotal {
+    kode_dapil: number;
+}
+
+/**
+ * The kecamatan to leave out at one level: those held there by a dapil whose kelurahan repeat party votes.
+ * `kecamatan` says which dapil of the level holds each kecamatan, the other two are the sides of the check
+ * for those dapil.
+ */
+export function withheldKecamatan(
+    kecamatan: readonly { kode_kecamatan: string; kode_dapil: number }[],
+    dapilVotes: readonly HolderTotal[],
+    areaVotes: readonly HolderTotal[],
+): Set<string> {
+    const byDapil = (rows: readonly HolderTotal[]) => {
+        const groups = new Map<number, HolderTotal[]>();
+        for (const row of rows) {
+            groups.set(row.kode_dapil, [...(groups.get(row.kode_dapil) ?? []), row]);
+        }
+        return groups;
+    };
+    const inDapil = byDapil(dapilVotes);
+    const inAreas = byDapil(areaVotes);
+    const failing = new Set(
+        [...inAreas.keys()].filter(
+            (kode) => checkPartySpread(inDapil.get(kode) ?? [], inAreas.get(kode) ?? []).status === 'tidak_sesuai',
+        ),
+    );
+    return new Set(kecamatan.filter((row) => failing.has(row.kode_dapil)).map((row) => row.kode_kecamatan));
+}

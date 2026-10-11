@@ -23,6 +23,8 @@ export const fields = {
             /^[a-z0-9_]{1,32}:\d{1,9}(,[a-z0-9_]{1,32}:\d{1,9})*$/,
             'suara harus berupa daftar kode_partai:jumlah yang dipisah koma, misalnya "pan:210000,pks:95000"',
         ),
+    // Supporters an application has recorded in the dapil, to count as new voters. The service holds none.
+    pendukung: digits(/^\d{1,9}$/, 'pendukung harus berupa angka'),
     partai: z.string().regex(/^[a-z0-9_]{1,32}$/, 'partai harus berupa kode partai, misalnya "pan"'),
     provinsi: digits(/^[1-9]\d$/, 'provinsi harus berupa kode 2 angka'),
     kabupaten: digits(/^[1-9]\d{3}$/, 'kabupaten harus berupa kode 4 angka'),

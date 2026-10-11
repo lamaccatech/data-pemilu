@@ -342,14 +342,15 @@ describe('padanan and alias', () => {
         expect(same.body.data.total_suara_sah).toBe(same.body.data.total_suara_sah_awal);
         expect(same.body.data.harga_kursi_terakhir).toBe(own.harga_kursi_terakhir);
         expect(same.body.data.pembagian_kursi).toHaveLength(own.jumlah_kursi + 1);
-        const pan = (body: { data: { partai: { kode_partai: string }[] } }) =>
-            body.data.partai.find((row) => row.kode_partai === 'pan') as {
-                suara: number;
-                suara_awal: number;
-                kursi: number;
-                kursi_awal: number;
-                kekurangan_kursi_berikutnya: number | null;
-            };
+        interface Tried {
+            kode_partai: string;
+            suara: number;
+            suara_awal: number;
+            kursi: number;
+            kursi_awal: number;
+            kekurangan_kursi_berikutnya: number | null;
+        }
+        const pan = (body: { data: { partai: Tried[] } }) => body.data.partai.find((row) => row.kode_partai === 'pan');
         expect(pan(same.body)).toMatchObject({ suara: own.suara_partai, kursi: own.kursi_partai });
 
         // The target for the next seat is the fewest votes that win it: one vote less does not.
@@ -382,6 +383,54 @@ describe('padanan and alias', () => {
         const under = await json(`${base}/simulasi?suara=psi:9000000`);
         const psi = under.body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'psi');
         expect(psi).toMatchObject({ kursi: 0, lolos_ambang_batas: false, kekurangan_kursi_berikutnya: null });
+    });
+
+    it('recommends the smallest swing that wins the next seat after the identified votes', async () => {
+        const base = '/v1/2024/dpr_ri/dapil/1101';
+        const own = (await json(`${base}?partai=pan`)).body.data;
+        const contest = (await json(`${base}/persaingan`)).body.data;
+        const { status, body } = await json(`${base}/rekomendasi?partai=pan&pendukung=1000`);
+        expect(status).toBe(200);
+        expect(body.data).toMatchObject({
+            kekurangan_kursi_berikutnya: own.kekurangan_kursi_berikutnya,
+            // The fixtures have no kelurahan, so the supporters are all that is identified.
+            sumber_teridentifikasi: {
+                pendukung: 1000,
+                ruang_suara: null,
+                lintas_tingkat: null,
+                dipakai: null,
+                pemilih_baru: 1000,
+            },
+        });
+        expect(body.data.riwayat).toMatchObject({ jumlah_dapil: 1, persen_dapil_ini: expect.any(Number) });
+        // Applied the way a caller would, the swing wins the seat, and one step less does not.
+        const seatsWith = async (swing: number) => {
+            let gained = 1000;
+            const tried: string[] = [];
+            for (const party of contest.partai as { kode_partai: string; suara: number }[]) {
+                if (party.kode_partai !== 'pan') {
+                    const moved = Math.round((party.suara * swing) / 100);
+                    gained += moved;
+                    tried.push(`${party.kode_partai}:${party.suara - moved}`);
+                }
+            }
+            tried.push(`pan:${own.suara_partai + gained}`);
+            const answer = await json(`${base}/simulasi?suara=${tried.join(',')}`);
+            return answer.body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'pan').kursi;
+        };
+        const swing = body.data.ayunan_persen;
+        expect(swing).toBeGreaterThan(0);
+        expect(await seatsWith(swing)).toBe(own.kursi_partai + 1);
+        expect(await seatsWith(Math.round((swing - 0.1) * 10) / 10)).toBe(own.kursi_partai);
+        // Enough supporters alone: no swing is asked for.
+        const enough = await json(`${base}/rekomendasi?partai=pan&pendukung=${own.kekurangan_kursi_berikutnya}`);
+        expect(enough.body.data).toMatchObject({ ayunan_persen: 0, suara_dari_ayunan: 0 });
+        // A party under the national threshold has no next seat to recommend a way to.
+        expect((await json(`${base}/rekomendasi?partai=psi`)).body.data).toBeNull();
+        expect((await json('/v1/2019/dpr_ri/dapil/1101/rekomendasi?partai=pan')).body.error.code).toBe(
+            'tidak-tersedia',
+        );
+        expect((await json(`${base}/rekomendasi`)).status).toBe(400);
     });
 
     it('refuses a what-if it cannot read', async () => {

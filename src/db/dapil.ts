@@ -185,3 +185,12 @@ export async function readAliases(db: D1Database): Promise<AliasRecord[]> {
         .all();
     return rows<AliasRecord>(result);
 }
+
+/** One party's votes in every dapil of a level, keyed by dapil. One range of the primary key. */
+export async function readPartyVotesOfLevel(db: D1Database, tingkat: Tingkat, partyId: number) {
+    const result = await db
+        .prepare('SELECT kode_dapil, suara FROM suara_partai WHERE tingkat = ? AND partai_id = ?')
+        .bind(TINGKAT[tingkat], partyId)
+        .all<{ kode_dapil: number; suara: number }>();
+    return new Map(result.results.map((row) => [row.kode_dapil, row.suara]));
+}

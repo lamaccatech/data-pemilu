@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import { round2 } from '../calc';
-import { type Election, partyCode, requireParty } from '../db/election';
+import { readDapil, readPadananList, readPartyVotesOfLevel } from '../db/dapil';
+import { type Election, eligibleParties, loadElection, partyCode, requireParty } from '../db/election';
 import {
     type AreaCandidateRecord,
     type CandidateAreaRecord,
@@ -16,7 +17,9 @@ import {
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, fields, optionalParty, parseParams } from '../http/params';
-import { checkPartySpread, checkSpread, toleratedVotes } from '../service/sebaran';
+import { viewDapil, votesMap } from '../service/dapil';
+import { historyOf, levelGapVotes, recommend, voteRoom } from '../service/rekomendasi';
+import { checkPartySpread, checkSpread, toleratedVotes, withheldKecamatan } from '../service/sebaran';
 import { TINGKAT_NAMES } from '../tingkat';
 
 const ONLY_2024 = 'Data kelurahan dan kecamatan';
@@ -265,22 +268,9 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         const withheld = new Map(
             TINGKAT_NAMES.map((level) => {
                 const holders = found.holders.get(level);
-                const dapilVotes = group(holders?.dapilVotes ?? [], (row) => row.kode_dapil);
-                const areaVotes = group(holders?.areaVotes ?? [], (row) => row.kode_dapil);
-                const failing = new Set(
-                    [...areaVotes.keys()].filter(
-                        (kode) =>
-                            checkPartySpread(dapilVotes.get(kode) ?? [], areaVotes.get(kode) ?? []).status ===
-                            'tidak_sesuai',
-                    ),
-                );
                 return [
                     level,
-                    new Set(
-                        (holders?.kecamatan ?? [])
-                            .filter((row) => failing.has(row.kode_dapil))
-                            .map((row) => row.kode_kecamatan),
-                    ),
+                    withheldKecamatan(holders?.kecamatan ?? [], holders?.dapilVotes ?? [], holders?.areaVotes ?? []),
                 ];
             }),
         );
@@ -387,6 +377,75 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             jumlah_kelurahan_di_bawah_patokan: data.length,
             total_ruang_suara: totalRoom,
             sebaran_partai: check,
+        });
+    });
+
+    // 28. A scenario for the party's next seat, made of what the data identifies and judged by what the
+    // party has done before: the votes the dapil's own figures point to, the smallest swing from every
+    // other party that closes the rest, and how often the party's votes rose that much between elections.
+    app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/rekomendasi', async (c) => {
+        const { pemilu, election, db } = await election2024(c, 'Rekomendasi');
+        const { tingkat, kode_dapil, partai, pendukung } = parseParams(c, {
+            tingkat: fields.tingkat,
+            kode_dapil: fields.kode_dapil,
+            partai: fields.partai,
+            pendukung: fields.pendukung.optional(),
+        });
+        const party = requireParty(election, partai);
+        const { dapil, votes, candidates } = await readDapil(db, tingkat, kode_dapil, party.partai_id);
+        if (dapil === null) {
+            throw dapilNotFound(tingkat, kode_dapil, pemilu);
+        }
+        const votesByParty = votesMap(votes);
+        const { view } = viewDapil(election, tingkat, dapil, votesByParty, candidates, party);
+        const shortfall = view.lolos_ambang_batas ? view.kekurangan_kursi_berikutnya : null;
+        // No next seat to win: every seat is the party's, it is under the national threshold, or the
+        // dapil has no party votes. There is nothing to recommend.
+        if (dapil.jumlah_kursi === null || shortfall === null || shortfall <= 0) {
+            return ok(c, null, { pemilu, tingkat, partai, kode_dapil: String(dapil.kode_dapil) });
+        }
+        const election2019 = await loadElection(c.env, '2019');
+        const party2019 = election2019.partyByCode.get(partai);
+        const [standings, levels, pairs, now, then] = await Promise.all([
+            readKelurahanStandings(db, tingkat, kode_dapil, party.partai_id),
+            readKecamatanAcrossLevels(db, tingkat, kode_dapil, party.partai_id),
+            readPadananList(db, tingkat),
+            readPartyVotesOfLevel(db, tingkat, party.partai_id),
+            party2019 === undefined
+                ? new Map<number, number>()
+                : readPartyVotesOfLevel(c.env.DB_2019, tingkat, party2019.partai_id),
+        ]);
+        // Kelurahan votes the source repeats would double either figure: such a dapil has none.
+        const isRepeated = checkPartySpread(standings.partyVotes, standings.partyAreas).status === 'tidak_sesuai';
+        const room = isRepeated ? null : voteRoom(standings.kelurahan);
+        const withheld = new Map(
+            TINGKAT_NAMES.map((level) => {
+                const holders = levels.holders.get(level);
+                return [
+                    level,
+                    withheldKecamatan(holders?.kecamatan ?? [], holders?.dapilVotes ?? [], holders?.areaVotes ?? []),
+                ];
+            }),
+        );
+        const gap = isRepeated ? null : levelGapVotes(tingkat, levels.kecamatan, levels.votes, withheld);
+        const own = votesByParty.get(party.partai_id) ?? 0;
+        const data = recommend({
+            votes: votesByParty,
+            eligible: eligibleParties(election, tingkat),
+            seats: dapil.jumlah_kursi,
+            partyId: party.partai_id,
+            shortfall,
+            supporters: pendukung ?? 0,
+            voteRoom: room === 0 ? null : room,
+            levelGap: gap === 0 ? null : gap,
+            history: historyOf(pairs, now, then, kode_dapil, own > 0 ? (shortfall / own) * 100 : 0),
+        });
+        return ok(c, data, {
+            pemilu,
+            tingkat,
+            partai,
+            kode_dapil: String(dapil.kode_dapil),
+            nama_dapil: dapil.nama_dapil,
         });
     });
 
