@@ -6,6 +6,7 @@ import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, electionOf, fields, optionalParty, parseParams } from '../http/params';
 import { type DapilView, groupByDapil, summariseViews, viewDapil, votesMap } from '../service/dapil';
+import { type Before, resultsByCode, viewCompetition } from '../service/persaingan';
 import { TINGKAT, TINGKAT_NAMES, type Tingkat } from '../tingkat';
 
 /**
@@ -32,6 +33,35 @@ async function votesIn2019ByName(
         }
     }
     return votes;
+}
+
+/**
+ * Every party's votes and seats in the comparable 2019 dapil, by `kode_partai`. Null when the 2024 dapil has
+ * none. Party codes, unlike ballot numbers, are the same in both elections.
+ */
+async function resultsIn2019(
+    env: AppEnv['Bindings'],
+    db: D1Database,
+    tingkat: Tingkat,
+    kodeDapil: number,
+): Promise<{ kode_dapil_2019: string; nama_dapil_2019: string; results: Map<string, Before> } | null> {
+    const { padanan } = await readPadanan(db, tingkat, kodeDapil);
+    if (padanan === null || padanan.sebanding !== 1) {
+        return null;
+    }
+    // D1 cannot join across databases: the 2019 figures come from a second query.
+    const [election2019, before] = await Promise.all([
+        loadElection(env, '2019'),
+        readDapil(env.DB_2019, tingkat, padanan.kode_dapil_2019),
+    ]);
+    if (before.dapil === null) {
+        return null;
+    }
+    return {
+        kode_dapil_2019: String(padanan.kode_dapil_2019),
+        nama_dapil_2019: padanan.nama_dapil_2019,
+        results: resultsByCode(election2019, tingkat, before.dapil.jumlah_kursi, votesMap(before.votes)),
+    };
 }
 
 export function registerDapilRoutes(app: Hono<AppEnv>): void {
@@ -196,6 +226,46 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 data_lengkap: complete,
             },
         );
+    });
+
+    // 15. Every party of a dapil side by side, for reading the contest rather than one party's position.
+    app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/persaingan', async (c) => {
+        const { pemilu, election, db } = await electionOf(c);
+        const { tingkat, kode_dapil } = parseParams(c, { tingkat: fields.tingkat, kode_dapil: fields.kode_dapil });
+        // Only a 2024 dapil has an earlier election to compare with.
+        const [{ dapil, votes, candidates }, before] = await Promise.all([
+            readDapil(db, tingkat, kode_dapil),
+            pemilu === '2024' ? resultsIn2019(c.env, db, tingkat, kode_dapil) : null,
+        ]);
+        if (dapil === null) {
+            throw dapilNotFound(tingkat, kode_dapil, pemilu);
+        }
+        const votesByParty = votesMap(votes);
+        const competition = viewCompetition(
+            election,
+            tingkat,
+            dapil,
+            votesByParty,
+            candidates,
+            before?.results ?? null,
+        );
+        const lastWinning = competition?.pembagian_kursi.kursi_terakhir ?? null;
+        const data = {
+            kode_dapil: String(dapil.kode_dapil),
+            nama_dapil: dapil.nama_dapil,
+            jumlah_kursi: dapil.jumlah_kursi,
+            total_suara_sah: competition === null ? null : votes.reduce((sum, row) => sum + row.suara, 0),
+            data_lengkap: competition !== null,
+            harga_kursi_terakhir: lastWinning === null ? null : Math.ceil(lastWinning.suara / lastWinning.pembagi),
+            padanan_2019:
+                before === null
+                    ? null
+                    : { kode_dapil_2019: before.kode_dapil_2019, nama_dapil_2019: before.nama_dapil_2019 },
+            partai: competition?.partai ?? [],
+            pembagian_kursi: competition?.pembagian_kursi ?? null,
+            penantang_terdekat: competition?.penantang_terdekat ?? null,
+        };
+        return ok(c, data, { pemilu, tingkat, jumlah_partai: data.partai.length });
     });
 
     // 13. Every 2024 dapil of a level that has a comparable 2019 dapil, so a caller can compare a whole

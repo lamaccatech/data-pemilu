@@ -300,3 +300,88 @@ describe('padanan and alias', () => {
         ]);
     });
 });
+
+describe('persaingan', () => {
+    it('calculates every party of a dapil the way the focus party is calculated', async () => {
+        const { status, body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
+        expect(status).toBe(200);
+        expect(body.data.data_lengkap).toBe(true);
+        const detail = await json('/v1/2024/dpr_ri/dapil/1101?partai=pan');
+        expect(body.data.harga_kursi_terakhir).toBe(detail.body.data.harga_kursi_terakhir);
+        const pan = body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'pan');
+        expect(pan).toMatchObject({
+            suara: detail.body.data.suara_partai,
+            kursi: detail.body.data.kursi_partai,
+            kuadran: detail.body.data.kuadran,
+            peluang_dekat: detail.body.data.peluang_dekat,
+            kekurangan_kursi_berikutnya: detail.body.data.kekurangan_kursi_berikutnya,
+        });
+        const votes = body.data.partai.map((row: { suara: number }) => row.suara);
+        expect(votes).toEqual([...votes].sort((a, b) => b - a));
+    });
+
+    it('lists the seats in the order they were won, then the first quotient that won nothing', async () => {
+        const { body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
+        const { tabel, kursi_terakhir, kursi_pertama_yang_gagal } = body.data.pembagian_kursi;
+        expect(tabel).toHaveLength(body.data.jumlah_kursi + 1);
+        expect(kursi_terakhir).toEqual(tabel[body.data.jumlah_kursi - 1]);
+        expect(kursi_pertama_yang_gagal).toMatchObject({ mendapat_kursi: false });
+        const seatsWon = new Map<string, number>();
+        for (const row of tabel.filter((entry: { mendapat_kursi: boolean }) => entry.mendapat_kursi)) {
+            seatsWon.set(row.kode_partai, (seatsWon.get(row.kode_partai) ?? 0) + 1);
+            expect(row.kursi_partai_ke).toBe(seatsWon.get(row.kode_partai));
+        }
+        for (const party of body.data.partai) {
+            expect(party.kursi).toBe(seatsWon.get(party.kode_partai) ?? 0);
+        }
+    });
+
+    it('splits a party vote into symbol and candidates, and names the cheapest seat to take', async () => {
+        const { body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
+        for (const party of body.data.partai) {
+            if (party.suara_caleg !== null) {
+                expect(party.suara_caleg + party.suara_gambar).toBe(party.suara);
+                expect(party.caleg_teratas.suara).toBeLessThanOrEqual(party.suara_caleg);
+            }
+            // A seat holder has votes to spare; a party without one has none to speak of.
+            expect(party.margin_kursi === null).toBe(party.kursi === 0);
+            // Under the national threshold no gain in one dapil wins a seat.
+            if (!party.lolos_ambang_batas) {
+                expect(party).toMatchObject({ kursi: 0, kuadran: 'kosong', kekurangan_kursi_berikutnya: null });
+            }
+        }
+        const shortfalls = body.data.partai
+            .map((row: { kekurangan_kursi_berikutnya: number | null }) => row.kekurangan_kursi_berikutnya)
+            .filter((value: number | null) => value !== null);
+        expect(body.data.penantang_terdekat.kekurangan).toBe(Math.min(...shortfalls));
+    });
+
+    it('sets the 2019 result of the same party beside it when the dapil is comparable', async () => {
+        const before = fixture(2019, 'dpr_ri');
+        const { body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
+        expect(body.data.padanan_2019).toEqual({ kode_dapil_2019: '1101', nama_dapil_2019: 'ACEH I' });
+        const pan = body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'pan');
+        expect(pan.hasil_2019).toMatchObject({
+            suara: before.partai_sendiri?.suara,
+            kursi: before.partai_sendiri?.kursi,
+        });
+        // Gelora did not exist in 2019.
+        const gelora = body.data.partai.find((row: { kode_partai: string }) => row.kode_partai === 'gelora');
+        expect(gelora.hasil_2019).toBeNull();
+    });
+
+    it('has no 2019 comparison for a dapil without a match, or for 2019 itself', async () => {
+        const provinsi = fixture(2024, 'dprd_provinsi');
+        const unmatched = await json(`/v1/2024/dprd_provinsi/dapil/${provinsi.kode_dapil}/persaingan`);
+        expect(unmatched.body.data.padanan_2019).toBeNull();
+        const earlier = await json('/v1/2019/dpr_ri/dapil/1101/persaingan');
+        expect(earlier.status).toBe(200);
+        expect(earlier.body.data.padanan_2019).toBeNull();
+        expect(earlier.body.data.partai.every((row: { hasil_2019: unknown }) => row.hasil_2019 === null)).toBe(true);
+    });
+
+    it('refuses a party parameter and an unknown dapil', async () => {
+        expect((await json('/v1/2024/dpr_ri/dapil/1101/persaingan?partai=pan')).status).toBe(400);
+        expect((await json('/v1/2024/dpr_ri/dapil/999999/persaingan')).body.error.code).toBe('dapil-tidak-ditemukan');
+    });
+});

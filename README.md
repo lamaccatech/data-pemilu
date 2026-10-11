@@ -76,6 +76,7 @@ returned as strings.
 | 12 | `GET /v1/2024/:tingkat/batas/dapil?provinsi=&kabupaten=` | Dapil outlines of one province, optionally one kabupaten. `provinsi` is required |
 | 13 | `GET /v1/2024/:tingkat/padanan` | Every 2024 dapil of the level with a comparable 2019 dapil, as `kode_dapil` and `kode_dapil_2019` pairs present in both results |
 | 14 | `GET /v1/2024/batas/kecamatan?kabupaten=` | Kecamatan shapes of one kabupaten, for drawing the inside of a dapil. Each feature has `kode_kecamatan`, `nama_kecamatan` and `kode_kabupaten` |
+| 15 | `GET /v1/:pemilu/:tingkat/dapil/:kode_dapil/persaingan` | Every party of the dapil side by side, most votes first: seats, `kuadran`, `margin_kursi` (votes above what its seats needed), `kekurangan_kursi_berikutnya`, the split into `suara_gambar` and `suara_caleg` with `caleg_teratas`, and for 2024 `hasil_2019` in the comparable dapil. Also the seats in the order they were won (`pembagian_kursi`) and `penantang_terdekat`, the party needing the fewest votes for one more seat. Takes no `partai` |
 
 Error codes: `tidak-berwenang` (401), `parameter-tidak-valid` (400, also for unknown query parameters),
 `pemilu-tidak-ditemukan`, `partai-tidak-ditemukan`, `dapil-tidak-ditemukan`, `kecamatan-tidak-ditemukan`,
