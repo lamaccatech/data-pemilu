@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fixtures from '../../reference/fixtures.json';
+import { normalizePersonName } from '../../src/calc';
 import { call, json } from './helpers';
 
 const fixture = (pemilu: number, tingkat: string, predicate: (expected: Expected) => boolean = () => true) => {
@@ -164,7 +165,8 @@ describe('dapil endpoints against the fixtures', () => {
         async (_label, expected) => {
             const { body } = await json(`/v1/2024/${expected.tingkat}/dapil/${expected.kode_dapil}/caleg?partai=pan`);
             const withoutParty = (row: Record<string, unknown>) => {
-                const { partai_id: _id, kode_partai: _code, ...rest } = row;
+                // suara_2019 is looked up for the API only; the reference has no such figure.
+                const { partai_id: _id, kode_partai: _code, suara_2019: _before, ...rest } = row;
                 return rest;
             };
             expect(body.data.tokoh_menonjol.map(withoutParty)).toEqual(expected.tokoh_menonjol?.map(withoutParty));
@@ -260,6 +262,27 @@ describe('padanan and alias', () => {
         const { status, body } = await json(`/v1/2024/dprd_provinsi/dapil/${provinsi.kode_dapil}/padanan?partai=pan`);
         expect(status).toBe(200);
         expect(body.data).toMatchObject({ padanan: null, hasil_2019: null });
+    });
+
+    it('adds the 2019 votes of a same-named candidate to the 2024 standouts', async () => {
+        const earlier = fixtures.dapil.find(
+            ({ expected }) =>
+                expected.pemilu === 2019 && expected.tingkat === 'dpr_ri' && String(expected.kode_dapil) === '1101',
+        );
+        const votesByName = new Map<string, number>();
+        for (const row of earlier?.input.caleg ?? []) {
+            const name = normalizePersonName(row.nama);
+            votesByName.set(name, Math.max(votesByName.get(name) ?? 0, Number(row.suara)));
+        }
+        const { body } = await json('/v1/2024/dpr_ri/dapil/1101/caleg');
+        expect(body.data.tokoh_menonjol.length).toBeGreaterThan(0);
+        for (const standout of body.data.tokoh_menonjol as { nama: string; suara_2019: number | null }[]) {
+            expect(standout.suara_2019).toBe(votesByName.get(normalizePersonName(standout.nama)) ?? null);
+        }
+        const in2019 = await json('/v1/2019/dpr_ri/dapil/1101/caleg');
+        expect(
+            in2019.body.data.tokoh_menonjol.every((row: { suara_2019: number | null }) => row.suara_2019 === null),
+        ).toBe(true);
     });
 
     it('lists the comparable pairs of a level', async () => {

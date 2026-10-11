@@ -65,7 +65,7 @@ returned as strings.
 | 1 | `GET /v1/:pemilu/partai` | Parties of the election, with ballot number and whether they pass the 4% threshold |
 | 2 | `GET /v1/:pemilu/:tingkat/dapil?partai=&provinsi=&kabupaten=` | One row per dapil for the focus party; `meta` carries the kuadran counts. Region filters are 2024 only |
 | 3 | `GET /v1/:pemilu/:tingkat/dapil/:kode_dapil?partai=` | The same row plus every party's votes and seats and the quotient table up to the first seat lost |
-| 4 | `GET /v1/:pemilu/:tingkat/dapil/:kode_dapil/caleg?partai=` | Candidates (all parties without `partai`) and `tokoh_menonjol` |
+| 4 | `GET /v1/:pemilu/:tingkat/dapil/:kode_dapil/caleg?partai=` | Candidates (all parties without `partai`) and `tokoh_menonjol`. For 2024, each standout carries `suara_2019`: the votes of a candidate with the same name (titles dropped) in the matching 2019 dapil, a likely match and not a proven one; null when there is none |
 | 5 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/kecamatan?partai=` | Party votes per kecamatan, summed from kelurahan |
 | 6 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/kelurahan?partai=&kecamatan=` | Per kelurahan: focus party, total, share, leading party, DPT. `kecamatan` is required |
 | 7 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/kelurahan/:kode_kelurahan/caleg?partai=` | Candidate votes in a kelurahan. `dprd_provinsi`: 404 `tidak-tersedia` |

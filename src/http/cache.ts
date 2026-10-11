@@ -2,7 +2,14 @@ import type { MiddlewareHandler } from 'hono';
 import { type AppEnv, CACHE_CONTROL } from './context';
 
 /**
- * Keeps successful answers in the Cache API, keyed by the full URL. Runs after authentication, so a cached
+ * Part of every cache key. Raise it whenever the shape or the figures of an answer change, so that answers
+ * cached before the change are no longer given out.
+ */
+const RESPONSE_VERSION = '2';
+const VERSION_PARAMETER = '__versi';
+
+/**
+ * Keeps successful answers in the Cache API, keyed by the full URL and the response version. Runs after authentication, so a cached
  * answer is only ever given to a caller with a valid key.
  */
 export const cacheResponses: MiddlewareHandler<AppEnv> = async (c, next) => {
@@ -11,7 +18,9 @@ export const cacheResponses: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (cache === undefined || c.req.method !== 'GET') {
         return next();
     }
-    const key = new Request(c.req.url);
+    const url = new URL(c.req.url);
+    url.searchParams.set(VERSION_PARAMETER, RESPONSE_VERSION);
+    const key = new Request(url);
     const hit = await cache.match(key);
     if (hit !== undefined) {
         const response = new Response(hit.body, hit);
