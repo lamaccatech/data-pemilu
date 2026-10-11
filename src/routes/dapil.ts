@@ -3,37 +3,55 @@ import { countedVotes, findStandouts, normalizePersonName, rankQuotients, round2
 import { readAliases, readDapil, readDapilList, readDapilVotes, readPadanan, readPadananList } from '../db/dapil';
 import { eligibleParties, loadElection, partyCode, requireParty } from '../db/election';
 import { readSettlementSplit, readVoteSplit } from '../db/kekuatan';
+import { readCandidateAreaTotals } from '../db/wilayah';
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, electionOf, fields, optionalParty, parseParams } from '../http/params';
 import { type DapilView, groupByDapil, summariseViews, viewDapil, votesMap } from '../service/dapil';
 import { type Earlier, earlierOf, viewCompetition, viewStandings } from '../service/persaingan';
+import { checkSpread } from '../service/sebaran';
 import { TINGKAT, TINGKAT_NAMES, type Tingkat } from '../tingkat';
 
+interface Earlier2019 {
+    suara: number;
+    kode_partai: string;
+    terpilih: boolean;
+}
+
 /**
- * Votes in the matching 2019 dapil by normalised candidate name, the highest where a name occurs twice.
- * Null when the dapil has no comparable 2019 dapil. A same name is a likely match, not a proven one.
+ * The candidates of the matching 2019 dapil by normalised name, the one with the most votes where a name
+ * occurs twice. Null when the dapil has no comparable 2019 dapil. A same name is a likely match, not a proven one.
  */
-async function votesIn2019ByName(
+async function candidatesIn2019ByName(
     env: AppEnv['Bindings'],
     db: D1Database,
     tingkat: Tingkat,
     kodeDapil: number,
-): Promise<Map<string, number> | null> {
+): Promise<Map<string, Earlier2019> | null> {
     const { padanan } = await readPadanan(db, tingkat, kodeDapil);
     if (padanan === null || padanan.sebanding !== 1) {
         return null;
     }
     // D1 cannot join across databases: the 2019 candidates come from a second query.
-    const before = await readDapil(env.DB_2019, tingkat, padanan.kode_dapil_2019);
-    const votes = new Map<string, number>();
+    const [election2019, before] = await Promise.all([
+        loadElection(env, '2019'),
+        readDapil(env.DB_2019, tingkat, padanan.kode_dapil_2019),
+    ]);
+    if (before.dapil === null) {
+        return null;
+    }
+    const found = new Map<string, Earlier2019>();
     for (const row of before.candidates) {
         const name = normalizePersonName(row.nama);
-        if (name !== '') {
-            votes.set(name, Math.max(votes.get(name) ?? 0, row.suara));
+        if (name !== '' && row.suara >= (found.get(name)?.suara ?? 0)) {
+            found.set(name, {
+                suara: row.suara,
+                kode_partai: partyCode(election2019, row.partai_id),
+                terpilih: row.kursi_ke > 0,
+            });
         }
     }
-    return votes;
+    return found;
 }
 
 /**
@@ -261,6 +279,14 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
         }
         const votesByParty = votesMap(votes);
         const complete = dapil.jumlah_kursi !== null && votes.some((row) => row.suara > 0);
+        // Only a 2024 dapil has an earlier election to look the same name up in, and votes below dapil level.
+        const [before, areaTotals] =
+            pemilu === '2024'
+                ? await Promise.all([
+                      candidatesIn2019ByName(c.env, db, tingkat, kode_dapil),
+                      readCandidateAreaTotals(db, tingkat, kode_dapil),
+                  ])
+                : [null, null];
         const caleg = candidates
             .filter((row) => party === null || row.partai_id === party.partai_id)
             .map((row) => ({
@@ -270,19 +296,18 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 jenis_kelamin: row.jenis_kelamin,
                 suara: row.suara,
                 kursi_ke: row.kursi_ke,
+                // The same name in the comparable 2019 dapil, whatever party it stood for then.
+                pemilu_2019: before?.get(normalizePersonName(row.nama)) ?? null,
             }));
         // Without party votes the shares cannot be worked out, as in the reference.
         const standouts = complete ? findStandouts(votesByParty, candidates, party?.partai_id ?? null) : null;
-        // Only a 2024 dapil has an earlier election to look the same name up in.
-        const before =
-            standouts !== null && pemilu === '2024' ? await votesIn2019ByName(c.env, db, tingkat, kode_dapil) : null;
         const tokohMenonjol =
             standouts === null
                 ? null
                 : standouts.map(({ partai_id, ...rest }) => ({
                       kode_partai: partyCode(election, partai_id),
                       ...rest,
-                      suara_2019: before?.get(normalizePersonName(rest.nama)) ?? null,
+                      suara_2019: before?.get(normalizePersonName(rest.nama))?.suara ?? null,
                   }));
         return ok(
             c,
@@ -295,6 +320,10 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 partai: partai ?? null,
                 jumlah_caleg: caleg.length,
                 data_lengkap: complete,
+                // False when no 2019 dapil is comparable, so an empty `pemilu_2019` there says nothing.
+                padanan_2019_tersedia: before !== null,
+                // Whether candidate votes below dapil level can be trusted here. Null for 2019, which has none.
+                sebaran_wilayah: areaTotals === null ? null : checkSpread(tingkat, candidates, areaTotals),
             },
         );
     });

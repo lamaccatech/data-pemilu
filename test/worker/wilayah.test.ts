@@ -28,6 +28,15 @@ beforeAll(async () => {
             'INSERT INTO kelurahan_suara_caleg VALUES (3, 700001, 7001011001, 12, 1, 55), (3, 700001, 7001011001, 12, 2, 5)',
         ),
         db.prepare('INSERT INTO kecamatan_suara_caleg VALUES (70001, 700101, 1, 1, 60)'),
+        // dprd_kabupaten_kota dapil 700003: the kelurahan give its one candidate more than the dapil does.
+        db.prepare(
+            "INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, nama_provinsi, jumlah_kursi, total_suara_sah) VALUES (3, 700003, 'UJI 3', 70, 'UJI', 3, 100)",
+        ),
+        db.prepare("INSERT INTO caleg VALUES (3, 700003, 12, 1, 'CALEG GANDA', 'L', 100, 1)"),
+        db.prepare("INSERT INTO dapil_kecamatan VALUES (3, 700003, '700103', 'KEC TIGA')"),
+        db.prepare(
+            'INSERT INTO kelurahan_suara_caleg VALUES (3, 700003, 7001031001, 12, 1, 100), (3, 700003, 7001031002, 12, 1, 90)',
+        ),
     ]);
 });
 
@@ -374,5 +383,122 @@ describe('ruang suara', () => {
         expect(empty.body.data).toEqual([]);
         expect(empty.body.meta).toMatchObject({ persen_patokan: 0, total_ruang_suara: 0 });
         expect((await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/ruang-suara')).status).toBe(400);
+    });
+
+    it('sets a candidate beside the party in every kecamatan, and in the kelurahan of one', async () => {
+        const path = '/v1/2024/dprd_kabupaten_kota/dapil/700001/caleg/pan/1/wilayah';
+        const { status, body } = await json(path);
+        expect(status).toBe(200);
+        expect(body.data).toEqual({
+            caleg: {
+                kode_partai: 'pan',
+                nomor_urut: 1,
+                nama: 'CALEG SATU',
+                jenis_kelamin: 'P',
+                suara: 150,
+                kursi_ke: 1,
+            },
+            suara_tercatat: 55,
+            wilayah: [
+                {
+                    kode_kecamatan: '700101',
+                    nama_kecamatan: 'KEC SATU',
+                    data_tersedia: true,
+                    suara: 55,
+                    suara_partai: 110,
+                    persen_dari_partai: 50,
+                },
+                {
+                    kode_kecamatan: '700102',
+                    nama_kecamatan: 'KEC DUA',
+                    data_tersedia: false,
+                    suara: null,
+                    suara_partai: null,
+                    persen_dari_partai: null,
+                },
+            ],
+        });
+        expect(body.meta).toMatchObject({
+            tingkat_wilayah: 'kecamatan',
+            sebaran_wilayah: {
+                status: 'sesuai',
+                tingkat_wilayah: 'kelurahan',
+                suara_caleg_dapil: 170,
+                suara_caleg_wilayah: 60,
+                kelebihan: 0,
+                persen_kelebihan: 0,
+                batas_persen: 1,
+            },
+        });
+        const inside = await json(`${path}?kecamatan=700101`);
+        expect(inside.body.meta).toMatchObject({ tingkat_wilayah: 'kelurahan', nama_kecamatan: 'KEC SATU' });
+        // DESA B has party votes and no candidate rows at all: a gap, not zero votes.
+        expect(inside.body.data.wilayah).toEqual([
+            {
+                kode_kelurahan: '7001011001',
+                nama_kelurahan: 'DESA A',
+                data_tersedia: true,
+                suara: 55,
+                suara_partai: 70,
+                persen_dari_partai: 78.57,
+            },
+            {
+                kode_kelurahan: '7001011002',
+                nama_kelurahan: 'DESA B',
+                data_tersedia: false,
+                suara: null,
+                suara_partai: 40,
+                persen_dari_partai: null,
+            },
+        ]);
+    });
+
+    it('withholds the areas of a dapil whose kelurahan give candidates more votes than the dapil', async () => {
+        const { status, body } = await json('/v1/2024/dprd_kabupaten_kota/dapil/700003/caleg/pan/1/wilayah');
+        expect(status).toBe(200);
+        expect(body.data).toMatchObject({ suara_tercatat: 190, wilayah: null });
+        expect(body.meta.sebaran_wilayah).toMatchObject({
+            status: 'tidak_sesuai',
+            suara_caleg_dapil: 100,
+            suara_caleg_wilayah: 190,
+            kelebihan: 90,
+            persen_kelebihan: 90,
+        });
+        const list = await json('/v1/2024/dprd_kabupaten_kota/dapil/700003/caleg');
+        expect(list.body.meta.sebaran_wilayah.status).toBe('tidak_sesuai');
+    });
+
+    it('reads the candidates of dprd_provinsi per kecamatan and refuses kelurahan', async () => {
+        const path = '/v1/2024/dprd_provinsi/dapil/70001/caleg/pkb/1/wilayah';
+        const { body } = await json(path);
+        expect(body.meta.sebaran_wilayah).toMatchObject({ status: 'sesuai', tingkat_wilayah: 'kecamatan' });
+        expect(body.data.wilayah).toEqual([
+            {
+                kode_kecamatan: '700101',
+                nama_kecamatan: 'KEC SATU',
+                data_tersedia: true,
+                suara: 60,
+                // The party rows come from another table and can fall short of the candidate. Served as they are.
+                suara_partai: 50,
+                persen_dari_partai: 120,
+            },
+        ]);
+        const inside = await json(`${path}?kecamatan=700101`);
+        expect(inside.status).toBe(404);
+        expect(inside.body.error.code).toBe('tidak-tersedia');
+    });
+
+    it('answers 404 for a candidate, a kecamatan or an election it does not have', async () => {
+        const base = '/v1/2024/dprd_kabupaten_kota/dapil/700001/caleg';
+        expect((await json(`${base}/pan/9/wilayah`)).body.error.code).toBe('caleg-tidak-ditemukan');
+        expect((await json(`${base}/pan/1/wilayah?kecamatan=710101`)).body.error.code).toBe(
+            'kecamatan-tidak-ditemukan',
+        );
+        expect((await json(`${base}/tidak_ada/1/wilayah`)).body.error.code).toBe('partai-tidak-ditemukan');
+        expect((await json('/v1/2019/dpr_ri/dapil/1101/caleg/pan/1/wilayah')).body.error.code).toBe('tidak-tersedia');
+        // A dapil without rows below it cannot be checked.
+        const none = await json('/v1/2024/dpr_ri/dapil/1101/caleg/pan/1/wilayah');
+        expect(none.body.data).toMatchObject({ suara_tercatat: null, wilayah: null });
+        expect(none.body.meta.sebaran_wilayah.status).toBe('tidak_tersedia');
     });
 });

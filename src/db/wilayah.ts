@@ -723,3 +723,152 @@ export async function readAllKelurahanDpt(db: D1Database): Promise<KelurahanDptT
         after = last.kode_kelurahan;
     }
 }
+
+export interface CandidateAreaTotal {
+    partai_id: number;
+    nomor_urut: number;
+    suara: number;
+}
+
+/**
+ * Every candidate's votes summed over the areas of a dapil: its kelurahan, or its kecamatan for
+ * dprd_provinsi. For holding against the dapil totals; see `checkSpread`.
+ */
+export function candidateAreaTotals(db: D1Database, tingkat: Tingkat, kodeDapil: number): D1PreparedStatement {
+    if (tingkat === 'dprd_provinsi') {
+        return db
+            .prepare(
+                'SELECT partai_id, nomor_urut, SUM(suara) AS suara FROM kecamatan_suara_caleg WHERE kode_dapil = ? GROUP BY partai_id, nomor_urut',
+            )
+            .bind(kodeDapil);
+    }
+    return db
+        .prepare(
+            'SELECT partai_id, nomor_urut, SUM(suara) AS suara FROM kelurahan_suara_caleg WHERE tingkat = ? AND kode_dapil = ? GROUP BY partai_id, nomor_urut',
+        )
+        .bind(TINGKAT[tingkat], kodeDapil);
+}
+
+export async function readCandidateAreaTotals(db: D1Database, tingkat: Tingkat, kodeDapil: number) {
+    const [totals] = await db.batch([candidateAreaTotals(db, tingkat, kodeDapil)]);
+    return rows<CandidateAreaTotal>(totals);
+}
+
+export interface CandidateAreaRecord {
+    kode: number;
+    /** The candidate's votes there; zero when others have rows there and the candidate has none. */
+    suara: number;
+}
+
+export interface ListedCandidate {
+    partai_id: number;
+    nomor_urut: number;
+    nama: string;
+    jenis_kelamin: string | null;
+    suara: number;
+    kursi_ke: number;
+}
+
+export interface CandidateIdentity {
+    partyId: number;
+    nomorUrut: number;
+}
+
+// Only candidates with votes have a row, so an area is known to be counted by anyone's row in it.
+const CANDIDATE_SUM = 'SUM(CASE WHEN partai_id = ? AND nomor_urut = ? THEN suara ELSE 0 END) AS suara';
+
+function candidateAreas(
+    db: D1Database,
+    tingkat: Tingkat,
+    kodeDapil: number,
+    { partyId, nomorUrut }: CandidateIdentity,
+    range: [number, number] | null,
+): D1PreparedStatement {
+    if (tingkat === 'dprd_provinsi') {
+        return db
+            .prepare(
+                `SELECT kode_kecamatan AS kode, ${CANDIDATE_SUM} FROM kecamatan_suara_caleg WHERE kode_dapil = ? GROUP BY kode_kecamatan`,
+            )
+            .bind(partyId, nomorUrut, kodeDapil);
+    }
+    if (range === null) {
+        return db
+            .prepare(
+                `SELECT kode_kelurahan / ${KELURAHAN_PER_KECAMATAN} AS kode, ${CANDIDATE_SUM} FROM kelurahan_suara_caleg WHERE tingkat = ? AND kode_dapil = ? GROUP BY 1`,
+            )
+            .bind(partyId, nomorUrut, TINGKAT[tingkat], kodeDapil);
+    }
+    return db
+        .prepare(
+            `SELECT kode_kelurahan AS kode, ${CANDIDATE_SUM} FROM kelurahan_suara_caleg WHERE tingkat = ? AND kode_dapil = ? AND kode_kelurahan BETWEEN ? AND ? GROUP BY kode_kelurahan`,
+        )
+        .bind(partyId, nomorUrut, TINGKAT[tingkat], kodeDapil, ...range);
+}
+
+function partyAreas(
+    db: D1Database,
+    tingkat: Tingkat,
+    kodeDapil: number,
+    partyId: number,
+    range: [number, number] | null,
+): D1PreparedStatement {
+    const level = TINGKAT[tingkat];
+    if (range === null) {
+        return db
+            .prepare(
+                `SELECT kode_kelurahan / ${KELURAHAN_PER_KECAMATAN} AS kode, SUM(CASE WHEN partai_id = ? THEN suara ELSE 0 END) AS suara FROM kelurahan_suara_partai WHERE tingkat = ? AND kode_dapil = ? GROUP BY 1`,
+            )
+            .bind(partyId, level, kodeDapil);
+    }
+    return db
+        .prepare(
+            'SELECT kode_kelurahan AS kode, SUM(CASE WHEN partai_id = ? THEN suara ELSE 0 END) AS suara FROM kelurahan_suara_partai WHERE tingkat = ? AND kode_dapil = ? AND kode_kelurahan BETWEEN ? AND ? GROUP BY kode_kelurahan',
+        )
+        .bind(partyId, level, kodeDapil, ...range);
+}
+
+/**
+ * One candidate's votes in every kecamatan of the dapil, or in the kelurahan of one kecamatan, beside the
+ * votes of the candidate's party there. With every candidate's area total, to check the dapil first.
+ */
+export async function readCandidateAreas(
+    db: D1Database,
+    tingkat: Tingkat,
+    kodeDapil: number,
+    candidate: CandidateIdentity,
+    kodeKecamatan: string | null,
+) {
+    const level = TINGKAT[tingkat];
+    const range = kodeKecamatan === null ? null : kelurahanRange(kodeKecamatan);
+    // An overseas kecamatan has no kelurahan: a range that holds nothing keeps the statements the same.
+    const within: [number, number] | null = kodeKecamatan === null ? null : (range ?? [-1, -1]);
+    const [dapil, kecamatan, everyone, totals, own, party, names] = await db.batch([
+        db.prepare(DAPIL).bind(level, kodeDapil),
+        db
+            .prepare(
+                'SELECT kode_kecamatan, nama_kecamatan FROM dapil_kecamatan WHERE tingkat = ? AND kode_dapil = ? ORDER BY kode_kecamatan',
+            )
+            .bind(level, kodeDapil),
+        // Everyone on the dapil's list: the check holds every candidate's area votes against these.
+        db
+            .prepare(
+                'SELECT partai_id, nomor_urut, nama, jenis_kelamin, suara, kursi_ke FROM caleg WHERE tingkat = ? AND kode_dapil = ?',
+            )
+            .bind(level, kodeDapil),
+        candidateAreaTotals(db, tingkat, kodeDapil),
+        candidateAreas(db, tingkat, kodeDapil, candidate, within),
+        partyAreas(db, tingkat, kodeDapil, candidate.partyId, within),
+        db
+            .prepare('SELECT kode_kelurahan, nama_kelurahan FROM kelurahan_dpt WHERE kode_kelurahan BETWEEN ? AND ?')
+            .bind(...(within ?? [-1, -1])),
+    ]);
+    return {
+        dapil: rows<DapilName>(dapil)[0] ?? null,
+        kecamatan: rows<{ kode_kecamatan: string; nama_kecamatan: string }>(kecamatan),
+        candidates: rows<ListedCandidate>(everyone),
+        areaTotals: rows<CandidateAreaTotal>(totals),
+        candidateVotes: rows<CandidateAreaRecord>(own),
+        partyVotes: rows<CandidateAreaRecord>(party),
+        kelurahanNames: rows<{ kode_kelurahan: number; nama_kelurahan: string }>(names),
+    };
+}

@@ -3,6 +3,8 @@ import { round2 } from '../calc';
 import { type Election, partyCode, requireParty } from '../db/election';
 import {
     type AreaCandidateRecord,
+    type CandidateAreaRecord,
+    readCandidateAreas,
     readDapilDpt,
     readKecamatanAcrossLevels,
     readKecamatanCandidates,
@@ -14,6 +16,7 @@ import {
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, fields, optionalParty, parseParams } from '../http/params';
+import { checkSpread, toleratedVotes } from '../service/sebaran';
 import { TINGKAT_NAMES } from '../tingkat';
 
 const ONLY_2024 = 'Data kelurahan dan kecamatan';
@@ -85,6 +88,20 @@ function group<T, K>(items: readonly T[], keyOf: (item: T) => K): Map<K, T[]> {
         }
     }
     return groups;
+}
+
+/** A candidate's votes in one area beside the party's. Null where the area has no rows of that kind. */
+function besideParty(own: CandidateAreaRecord | undefined, party: CandidateAreaRecord | undefined) {
+    const votes = own?.suara ?? null;
+    const partyVotes = party?.suara ?? null;
+    return {
+        // False when no candidate of any party has a row there, which is a gap in the data, not zero votes.
+        data_tersedia: own !== undefined,
+        suara: votes,
+        suara_partai: partyVotes,
+        persen_dari_partai:
+            votes === null || partyVotes === null || partyVotes <= 0 ? null : round2((votes / partyVotes) * 100),
+    };
 }
 
 export function registerWilayahRoutes(app: Hono<AppEnv>): void {
@@ -409,6 +426,99 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             nama_dapil: found.dapil.nama_dapil,
             partai: partai ?? null,
             jumlah_caleg: data.caleg.length,
+        });
+    });
+
+    // 23. Where one candidate's votes come from: every kecamatan of the dapil, or the kelurahan of one
+    // kecamatan, beside the votes of the candidate's party there. Only where the areas agree with the dapil.
+    app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/caleg/:partai/:nomor_urut/wilayah', async (c) => {
+        const { pemilu, election, db } = await election2024(c, ONLY_2024);
+        const { tingkat, kode_dapil, partai, nomor_urut, kecamatan } = parseParams(c, {
+            tingkat: fields.tingkat,
+            kode_dapil: fields.kode_dapil,
+            partai: fields.partai,
+            nomor_urut: fields.nomor_urut,
+            kecamatan: fields.kode_kecamatan.optional(),
+        });
+        if (tingkat === 'dprd_provinsi' && kecamatan !== undefined) {
+            throw notFound('tidak-tersedia', 'Suara caleg DPRD provinsi hanya tersedia sampai tingkat kecamatan.');
+        }
+        const party = requireParty(election, partai);
+        const found = await readCandidateAreas(
+            db,
+            tingkat,
+            kode_dapil,
+            { partyId: party.partai_id, nomorUrut: nomor_urut },
+            kecamatan ?? null,
+        );
+        if (found.dapil === null) {
+            throw dapilNotFound(tingkat, kode_dapil, pemilu);
+        }
+        const candidate = found.candidates.find(
+            (row) => row.partai_id === party.partai_id && row.nomor_urut === nomor_urut,
+        );
+        if (candidate === undefined) {
+            throw notFound(
+                'caleg-tidak-ditemukan',
+                `Caleg ${partai} nomor urut ${nomor_urut} tidak ada di dapil ${kode_dapil}.`,
+            );
+        }
+        const inside = kecamatan === undefined ? null : found.kecamatan.find((row) => row.kode_kecamatan === kecamatan);
+        if (inside === undefined) {
+            throw notFound('kecamatan-tidak-ditemukan', `Kecamatan ${kecamatan} tidak termasuk dapil ${kode_dapil}.`);
+        }
+        const check = checkSpread(tingkat, found.candidates, found.areaTotals);
+        const recorded =
+            found.areaTotals.find((row) => row.partai_id === party.partai_id && row.nomor_urut === nomor_urut)?.suara ??
+            0;
+        // A dapil can pass while one candidate in it carries repeated votes, so the candidate is held to the
+        // same tolerance.
+        const shown = check.status === 'sesuai' && recorded <= toleratedVotes(candidate.suara);
+        const own = new Map(found.candidateVotes.map((row) => [row.kode, row]));
+        const partyVotes = new Map(found.partyVotes.map((row) => [row.kode, row]));
+        let areas = null;
+        if (shown && inside === null) {
+            areas = found.kecamatan.map((row) => {
+                const kode = Number(row.kode_kecamatan);
+                return {
+                    kode_kecamatan: row.kode_kecamatan,
+                    nama_kecamatan: row.nama_kecamatan,
+                    ...besideParty(own.get(kode), partyVotes.get(kode)),
+                };
+            });
+        } else if (shown) {
+            const names = new Map(found.kelurahanNames.map((row) => [row.kode_kelurahan, row.nama_kelurahan]));
+            areas = [...new Set([...own.keys(), ...partyVotes.keys()])]
+                .sort((a, b) => a - b)
+                .map((kode) => ({
+                    kode_kelurahan: String(kode),
+                    nama_kelurahan: names.get(kode) ?? null,
+                    ...besideParty(own.get(kode), partyVotes.get(kode)),
+                }));
+        }
+        const data = {
+            caleg: {
+                kode_partai: partai,
+                nomor_urut: candidate.nomor_urut,
+                nama: candidate.nama,
+                jenis_kelamin: candidate.jenis_kelamin,
+                suara: candidate.suara,
+                kursi_ke: candidate.kursi_ke,
+            },
+            // The candidate's votes summed over the areas, to set beside `caleg.suara`. Null without area rows.
+            suara_tercatat: check.status === 'tidak_tersedia' ? null : recorded,
+            // Null when the areas do not agree with the dapil totals, or there are none: see `meta.sebaran_wilayah`.
+            wilayah: areas,
+        };
+        return ok(c, data, {
+            pemilu,
+            tingkat,
+            kode_dapil: String(found.dapil.kode_dapil),
+            nama_dapil: found.dapil.nama_dapil,
+            tingkat_wilayah: inside === null ? 'kecamatan' : 'kelurahan',
+            kode_kecamatan: inside?.kode_kecamatan ?? null,
+            nama_kecamatan: inside?.nama_kecamatan ?? null,
+            sebaran_wilayah: check,
         });
     });
 }

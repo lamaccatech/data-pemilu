@@ -65,7 +65,7 @@ returned as strings.
 | 1 | `GET /v1/:pemilu/partai` | Parties of the election, with ballot number and whether they pass the 4% threshold |
 | 2 | `GET /v1/:pemilu/:tingkat/dapil?partai=&provinsi=&kabupaten=` | One row per dapil for the focus party; `meta` carries the kuadran counts. Region filters are 2024 only |
 | 3 | `GET /v1/:pemilu/:tingkat/dapil/:kode_dapil?partai=` | The same row plus every party's votes and seats and the quotient table up to the first seat lost |
-| 4 | `GET /v1/:pemilu/:tingkat/dapil/:kode_dapil/caleg?partai=` | Candidates (all parties without `partai`) and `tokoh_menonjol`. For 2024, each standout carries `suara_2019`: the votes of a candidate with the same name (titles dropped) in the matching 2019 dapil, a likely match and not a proven one; null when there is none |
+| 4 | `GET /v1/:pemilu/:tingkat/dapil/:kode_dapil/caleg?partai=` | Candidates (all parties without `partai`) and `tokoh_menonjol`. For 2024, each candidate carries `pemilu_2019`: the votes, party and `terpilih` of a candidate with the same name (titles dropped) in the matching 2019 dapil, a likely match and not a proven one; null when there is none. `meta.padanan_2019_tersedia` is false when no 2019 dapil is comparable, so that null says nothing there. Each standout carries the same votes as `suara_2019`. `meta.sebaran_wilayah` is the check of candidate votes below dapil level (see Classification); null for 2019 |
 | 5 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/kecamatan?partai=` | Party votes per kecamatan, summed from kelurahan |
 | 6 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/kelurahan?partai=&kecamatan=` | Per kelurahan: focus party, total, share, leading party, every party's votes (`partai`), DPT. `kecamatan` is required |
 | 7 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/kelurahan/:kode_kelurahan/caleg?partai=` | Candidate votes in a kelurahan. `dprd_provinsi`: 404 `tidak-tersedia` |
@@ -87,6 +87,7 @@ returned as strings.
 | 20 | `GET /v1/2024/dpt/provinsi` | Each province's total and how many are under 30 |
 | 21 | `GET /v1/2024/:tingkat/provinsi/:kode/dpt` | Each dapil of a province: total and how many are under 30. A kelurahan that votes in another dapil is left out |
 | 22 | `GET /v1/:pemilu/:tingkat/kekuatan?partai=&provinsi=` | One party's votes split into `suara_gambar` and `suara_caleg`, over the dapil where candidate votes are known and do not exceed the party's votes. For 2024, `pemukiman` splits the same votes into `kota` and `kabupaten`: a kota is a kabupaten code whose last two digits are 71 or higher. A dapil wholly in one kind keeps its full votes; a mixed dapil is split by kelurahan, and the rest is `belum_terpetakan`. 2019 has `pemukiman: null`. A 2019 province filter works for `dpr_ri` only |
+| 23 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/caleg/:partai/:nomor_urut/wilayah?kecamatan=` | Where one candidate's votes come from: every kecamatan of the dapil, or with `kecamatan` its kelurahan, each with the candidate's votes (`suara`), the votes of the candidate's party there (`suara_partai`) and the first as a share of the second. `suara_tercatat` is the candidate's votes summed over the areas, which can fall short of `caleg.suara`. `wilayah` is null when `meta.sebaran_wilayah` is not `sesuai`, or when this candidate alone has more votes in the areas than in the dapil. `dprd_provinsi` stops at kecamatan: with `kecamatan` it is a 404 `tidak-tersedia` |
 
 Answers may be kept by the caller's HTTP cache for a day. A caller that needs a changed answer sooner adds
 `__versi=<anything>` to its requests and changes the value: the parameter is accepted on every endpoint and
@@ -94,7 +95,7 @@ ignored, so it only makes the URL new.
 
 Error codes: `tidak-berwenang` (401), `parameter-tidak-valid` (400, also for unknown query parameters),
 `pemilu-tidak-ditemukan`, `partai-tidak-ditemukan`, `dapil-tidak-ditemukan`, `kecamatan-tidak-ditemukan`,
-`kelurahan-tidak-ditemukan`, `tidak-tersedia`, `tidak-ditemukan` (all 404), `data-belum-dimuat` (503).
+`kelurahan-tidak-ditemukan`, `caleg-tidak-ditemukan`, `tidak-tersedia`, `tidak-ditemukan` (all 404), `data-belum-dimuat` (503).
 
 ### Boundaries
 
@@ -145,6 +146,13 @@ in the same order as endpoint 2 with the same `provinsi`, so the two join on `ko
 - `peluang_dekat`: `kekurangan_kursi_berikutnya` is less than half of `harga_kursi_terakhir`. Always false
   for a party under the national threshold, which cannot win a `dpr_ri` seat whatever it gains in one dapil.
 
+- `sebaran_wilayah`: whether candidate votes below dapil level agree with the dapil. Every candidate's votes are
+  summed over the kelurahan of the dapil (the kecamatan for `dprd_provinsi`) and set against the candidate's
+  dapil total. `kelebihan` is the votes above those totals, summed over the candidates. `sesuai` when it is
+  at most 1% of the dapil's candidate votes (`batas_persen`), `tidak_sesuai` above that, `tidak_tersedia`
+  when the dapil has no rows below it or no candidate totals to hold them against. Fewer votes in the areas
+  than in the dapil is a gap, not a fault, and passes.
+
 ### Gaps the API reports
 
 Missing data is reported, never filled in.
@@ -162,10 +170,21 @@ Missing data is reported, never filled in.
 
 Served as they are; fix them in the export, not here.
 
-- **Kelurahan candidate votes are inflated in places.** In 17 `dpr_ri` and 49 `dprd_kabupaten_kota` dapil the
-  candidate votes summed over kelurahan exceed the dapil-level candidate total. ACEH I sums to 1.83 times
-  its total (close to double in every kabupaten), KOTA KENDARI 1 to 72 times. Treat endpoint 7 with care
-  until the export is corrected.
+- **Candidate votes below dapil level are repeated in places.** ACEH I gives its candidates 1.83 times their
+  dapil votes (close to double in every kabupaten), KOTA KENDARI 1 gives 72 times. The total alone does not
+  show it: SUMATERA UTARA I sums to 1.015 times its total with a third of its kelurahan missing. The
+  `sebaran_wilayah` check measures it per candidate instead. On the loaded data:
+
+  | Level | `sesuai` | `tidak_sesuai` | `tidak_tersedia` |
+  | --- | --- | --- | --- |
+  | `dpr_ri` (kelurahan) | 71 | 12 | 1 |
+  | `dprd_provinsi` (kecamatan) | 255 | 4 | 42 |
+  | `dprd_kabupaten_kota` (kelurahan) | 1,990 | 25 | 310 |
+
+  The 12 `dpr_ri` dapil are ACEH I and II, SUMATERA UTARA I to III, SUMATERA BARAT I, RIAU II, JAMBI,
+  SUMATERA SELATAN I, KALIMANTAN SELATAN II, NUSA TENGGARA TIMUR I and SULAWESI TENGGARA. Of the 310, 107
+  have kelurahan rows but no candidate votes at dapil level. Endpoint 23 withholds what does not pass.
+  Endpoints 7 and 8 serve the rows as they are: ask endpoint 4 for the check before trusting them.
 - `kelurahan_suara_caleg_2024.csv` has 2,058 rows (kabupaten 9110) whose `kode_dapil` is `#N/A`. `build-sql`
   restores it from the kecamatan of the kelurahan, which names exactly one dapil (9101), and prints the count.
 - `nama_kabupaten` is empty for every 2024 `dprd_kabupaten_kota` dapil.

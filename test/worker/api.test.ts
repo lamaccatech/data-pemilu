@@ -293,6 +293,36 @@ describe('padanan and alias', () => {
         ).toBe(true);
     });
 
+    it('marks every 2024 candidate whose name stood in the comparable 2019 dapil', async () => {
+        const { body } = await json('/v1/2024/dpr_ri/dapil/1101/caleg');
+        expect(body.meta.padanan_2019_tersedia).toBe(true);
+        const before = await json('/v1/2019/dpr_ri/dapil/1101/caleg');
+        const earlier = new Map<string, { suara: number; kode_partai: string; kursi_ke: number }>();
+        for (const row of before.body.data.caleg) {
+            const name = normalizePersonName(row.nama);
+            if (name !== '' && row.suara >= (earlier.get(name)?.suara ?? 0)) {
+                earlier.set(name, row);
+            }
+        }
+        const marked = body.data.caleg.filter((row: { pemilu_2019: unknown }) => row.pemilu_2019 !== null);
+        expect(marked.length).toBeGreaterThan(0);
+        for (const row of body.data.caleg) {
+            const match = earlier.get(normalizePersonName(row.nama));
+            expect(row.pemilu_2019).toEqual(
+                match === undefined
+                    ? null
+                    : { suara: match.suara, kode_partai: match.kode_partai, terpilih: match.kursi_ke > 0 },
+            );
+        }
+        // 2019 has no earlier election here and no votes below dapil level.
+        expect(before.body.meta).toMatchObject({ padanan_2019_tersedia: false, sebaran_wilayah: null });
+        expect(before.body.data.caleg.every((row: { pemilu_2019: unknown }) => row.pemilu_2019 === null)).toBe(true);
+        // A level without a comparable dapil says so, instead of looking like nobody stood before.
+        const provinsi = fixtures.dapil.find(({ expected }) => expected.tingkat === 'dprd_provinsi');
+        const without = await json(`/v1/2024/dprd_provinsi/dapil/${provinsi?.expected.kode_dapil}/caleg`);
+        expect(without.body.meta.padanan_2019_tersedia).toBe(false);
+    });
+
     it('lists the comparable pairs of a level', async () => {
         const { status, body } = await json('/v1/2024/dpr_ri/padanan');
         expect(status).toBe(200);
