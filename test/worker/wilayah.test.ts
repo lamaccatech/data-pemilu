@@ -206,4 +206,24 @@ describe('kecamatan and kelurahan endpoints', () => {
         expect(status).toBe(404);
         expect(body.error.code).toBe('tidak-tersedia');
     });
+
+    it('lists every kelurahan DPT row', async () => {
+        const { status, body } = await json('/v1/2024/dpt');
+        expect(status).toBe(200);
+        const byCode = new Map(
+            body.data.map((row: { kode_kelurahan: string; dpt: number }) => [row.kode_kelurahan, row.dpt]),
+        );
+        expect(byCode.get('7001011001')).toBe(200);
+        expect(byCode.get('7001011002')).toBe(150);
+        expect(byCode.get('7001011003')).toBe(100);
+        expect(byCode.get('7001011004')).toBe(90);
+        expect(body.meta.jumlah).toBe(body.data.length);
+        expect(body.meta.total_dpt).toBe(body.data.reduce((sum: number, row: { dpt: number }) => sum + row.dpt, 0));
+    });
+
+    it('has no kelurahan DPT for 2019', async () => {
+        const { status, body } = await json('/v1/2019/dpt');
+        expect(status).toBe(404);
+        expect(body.error.code).toBe('tidak-tersedia');
+    });
 });

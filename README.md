@@ -77,6 +77,7 @@ returned as strings.
 | 13 | `GET /v1/2024/:tingkat/padanan` | Every 2024 dapil of the level with a comparable 2019 dapil, as `kode_dapil` and `kode_dapil_2019` pairs present in both results |
 | 14 | `GET /v1/2024/batas/kecamatan?kabupaten=` | Kecamatan shapes of one kabupaten, for drawing the inside of a dapil. Each feature has `kode_kecamatan`, `nama_kecamatan` and `kode_kabupaten` |
 | 15 | `GET /v1/:pemilu/:tingkat/dapil/:kode_dapil/persaingan` | Every party of the dapil side by side, most votes first: seats, `kuadran`, `margin_kursi` (votes above what its seats needed), `kekurangan_kursi_berikutnya`, the split into `suara_gambar` and `suara_caleg` with `caleg_teratas`, and for 2024 `hasil_2019` in the comparable dapil. Also the seats in the order they were won (`pembagian_kursi`) and `penantang_terdekat`, the party needing the fewest votes for one more seat. Takes no `partai` |
+| 16 | `GET /v1/2024/dpt` | Every kelurahan's registered voters: `kode_kelurahan` and `dpt`. `meta.total_dpt` is the national sum. 2019 returns 404 `tidak-tersedia` |
 
 Answers may be kept by the caller's HTTP cache for a day. A caller that needs a changed answer sooner adds
 `__versi=<anything>` to its requests and changes the value: the parameter is accepted on every endpoint and

@@ -218,3 +218,33 @@ export async function readKecamatanCandidates(
         candidates: rows<AreaCandidateRecord>(candidates),
     };
 }
+
+export interface KelurahanDptTotal {
+    kode_kelurahan: number;
+    dpt: number;
+}
+
+// One page stays under the D1 row cap. The full table is about 84,000 rows.
+const KELURAHAN_DPT_PAGE = 10_000;
+
+/** Every kelurahan's registered-voter total. Paged, because one statement cannot return the whole table. */
+export async function readAllKelurahanDpt(db: D1Database): Promise<KelurahanDptTotal[]> {
+    const collected: KelurahanDptTotal[] = [];
+    let after = 0;
+    for (;;) {
+        const page = rows<KelurahanDptTotal>(
+            await db
+                .prepare(
+                    'SELECT kode_kelurahan, dpt FROM kelurahan_dpt WHERE kode_kelurahan > ? ORDER BY kode_kelurahan LIMIT ?',
+                )
+                .bind(after, KELURAHAN_DPT_PAGE)
+                .all(),
+        );
+        collected.push(...page);
+        const last = page.at(-1);
+        if (page.length < KELURAHAN_DPT_PAGE || last === undefined) {
+            return collected;
+        }
+        after = last.kode_kelurahan;
+    }
+}
