@@ -321,3 +321,39 @@ describe('one party across the three levels', () => {
         expect((await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/lintas-tingkat')).status).toBe(400);
     });
 });
+
+describe('ruang suara', () => {
+    it('ranks the kelurahan where the party polled under its own average, in votes', async () => {
+        // pkb has 90 of the 200 votes of dapil 700001: 45%. In DESA A it has 30 of 100, in DESA B 60 of 100.
+        const { status, body } = await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/ruang-suara?partai=pkb');
+        expect(status).toBe(200);
+        expect(body.data).toEqual([
+            {
+                kode_kelurahan: '7001011001',
+                nama_kelurahan: 'DESA A',
+                kode_kecamatan: '700101',
+                nama_kecamatan: 'KEC SATU',
+                suara_partai: 30,
+                total_suara_sah: 100,
+                persen_suara: 30,
+                ruang_suara: 15,
+                partai_unggul: { kode_partai: 'pan', suara: 70, persen_suara: 70 },
+                dpt: { dpt: 200, di_bawah_30: 60 },
+            },
+        ]);
+        expect(body.meta).toMatchObject({
+            persen_patokan: 45,
+            jumlah_kelurahan_berdata: 2,
+            jumlah_kelurahan_di_bawah_patokan: 1,
+            total_ruang_suara: 15,
+        });
+    });
+
+    it('is empty for a dapil without kelurahan votes, and needs a party', async () => {
+        const empty = await json('/v1/2024/dpr_ri/dapil/7001/ruang-suara?partai=pan');
+        expect(empty.status).toBe(200);
+        expect(empty.body.data).toEqual([]);
+        expect(empty.body.meta).toMatchObject({ persen_patokan: 0, total_ruang_suara: 0 });
+        expect((await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/ruang-suara')).status).toBe(400);
+    });
+});

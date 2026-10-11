@@ -109,6 +109,58 @@ export async function readKecamatanAcrossLevels(db: D1Database, tingkat: Tingkat
     };
 }
 
+export interface KelurahanStandingRecord {
+    kode_kelurahan: number;
+    total: number;
+    partai: number;
+    suara_unggul: number;
+    partai_unggul: number;
+    nama_kelurahan: string | null;
+    dpt: number | null;
+    di_bawah_30: number | null;
+}
+
+/**
+ * Every kelurahan of a dapil in one pass: its valid votes, one party's votes, the leading party, and the
+ * voter roll. With a single MAX in the query SQLite takes the bare `partai_id` from the row that holds the
+ * maximum, which is the leading party; equal votes give either of them.
+ */
+export async function readKelurahanStandings(db: D1Database, tingkat: Tingkat, kodeDapil: number, partyId: number) {
+    const level = TINGKAT[tingkat];
+    const [dapil, kecamatan, kelurahan] = await db.batch([
+        db.prepare(DAPIL).bind(level, kodeDapil),
+        db
+            .prepare('SELECT kode_kecamatan, nama_kecamatan FROM dapil_kecamatan WHERE tingkat = ? AND kode_dapil = ?')
+            .bind(level, kodeDapil),
+        db
+            .prepare(
+                `SELECT k.kode_kelurahan AS kode_kelurahan,
+                        SUM(k.suara) AS total,
+                        SUM(CASE WHEN k.partai_id = ? THEN k.suara ELSE 0 END) AS partai,
+                        MAX(k.suara) AS suara_unggul,
+                        k.partai_id AS partai_unggul,
+                        d.nama_kelurahan AS nama_kelurahan,
+                        d.dpt AS dpt,
+                        d.usia_kurang21 + d.usia_u21_25 + d.usia_u26_30 AS di_bawah_30
+                 FROM kelurahan_suara_partai k
+                 LEFT JOIN kelurahan_dpt d ON d.kode_kelurahan = k.kode_kelurahan
+                 WHERE k.tingkat = ? AND k.kode_dapil = ?
+                 GROUP BY k.kode_kelurahan`,
+            )
+            .bind(partyId, level, kodeDapil),
+    ]);
+    return {
+        dapil: rows<DapilName>(dapil)[0] ?? null,
+        kecamatan: new Map(
+            rows<{ kode_kecamatan: string; nama_kecamatan: string }>(kecamatan).map((row) => [
+                row.kode_kecamatan,
+                row.nama_kecamatan,
+            ]),
+        ),
+        kelurahan: rows<KelurahanStandingRecord>(kelurahan),
+    };
+}
+
 export interface DapilDptBand {
     kode_kecamatan: string;
     dpt: number;

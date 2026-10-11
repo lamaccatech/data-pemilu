@@ -8,6 +8,7 @@ import {
     readKecamatanCandidates,
     readKecamatanVotes,
     readKelurahanCandidates,
+    readKelurahanStandings,
     readKelurahanVotes,
 } from '../db/wilayah';
 import { notFound } from '../errors';
@@ -247,6 +248,71 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             nama_dapil: found.dapil.nama_dapil,
             partai,
             jumlah_kecamatan: data.length,
+        });
+    });
+
+    // 18. Where one party polled under its own average in the dapil, and by how many votes: for each
+    // kelurahan, its valid votes times the gap between the party's share over the dapil's kelurahan and
+    // its share there. A benchmark against the party's own result, not a forecast.
+    app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/ruang-suara', async (c) => {
+        const { pemilu, election, db } = await election2024(c, ONLY_2024);
+        const { tingkat, kode_dapil, partai } = parseParams(c, {
+            tingkat: fields.tingkat,
+            kode_dapil: fields.kode_dapil,
+            partai: fields.partai,
+        });
+        const party = requireParty(election, partai);
+        const found = await readKelurahanStandings(db, tingkat, kode_dapil, party.partai_id);
+        if (found.dapil === null) {
+            throw dapilNotFound(tingkat, kode_dapil, pemilu);
+        }
+        const counted = found.kelurahan.filter((row) => row.total > 0);
+        let partyVotes = 0;
+        let validVotes = 0;
+        for (const row of counted) {
+            partyVotes += row.partai;
+            validVotes += row.total;
+        }
+        // The party's share over the kelurahan that have votes, so every kelurahan is measured against
+        // the same ground it is part of. The kelurahan data is incomplete, so this can differ a little
+        // from the share of the dapil result.
+        const benchmark = validVotes > 0 ? partyVotes / validVotes : 0;
+        let totalRoom = 0;
+        const data = counted
+            .map((row) => {
+                const room = Math.max(Math.round(row.total * benchmark - row.partai), 0);
+                const kodeKecamatan = String(Math.floor(row.kode_kelurahan / 10_000)).padStart(6, '0');
+                totalRoom += room;
+                return {
+                    kode_kelurahan: String(row.kode_kelurahan),
+                    nama_kelurahan: row.nama_kelurahan,
+                    kode_kecamatan: kodeKecamatan,
+                    nama_kecamatan: found.kecamatan.get(kodeKecamatan) ?? null,
+                    suara_partai: row.partai,
+                    total_suara_sah: row.total,
+                    persen_suara: round2((row.partai / row.total) * 100),
+                    ruang_suara: room,
+                    partai_unggul: {
+                        kode_partai: partyCode(election, row.partai_unggul),
+                        suara: row.suara_unggul,
+                        persen_suara: round2((row.suara_unggul / row.total) * 100),
+                    },
+                    dpt: row.dpt === null ? null : { dpt: row.dpt, di_bawah_30: row.di_bawah_30 ?? 0 },
+                };
+            })
+            // Only the kelurahan under the party's average have room; the largest first.
+            .filter((row) => row.ruang_suara > 0)
+            .sort((a, b) => b.ruang_suara - a.ruang_suara || a.kode_kelurahan.localeCompare(b.kode_kelurahan));
+        return ok(c, data, {
+            pemilu,
+            tingkat,
+            kode_dapil: String(found.dapil.kode_dapil),
+            nama_dapil: found.dapil.nama_dapil,
+            partai,
+            persen_patokan: round2(benchmark * 100),
+            jumlah_kelurahan_berdata: counted.length,
+            jumlah_kelurahan_di_bawah_patokan: data.length,
+            total_ruang_suara: totalRoom,
         });
     });
 
