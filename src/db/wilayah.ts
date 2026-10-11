@@ -263,6 +263,223 @@ const KELURAHAN_PER_PROVINCE = 100_000_000;
 
 export type VoterRoll = Omit<DapilDptBand, 'kode_kecamatan'>;
 
+export interface AreaRoll {
+    kode: string;
+    dpt: number;
+    di_bawah_30: number;
+}
+
+function under30Of(roll: Pick<VoterRoll, 'usia_kurang21' | 'usia_u21_25' | 'usia_u26_30'>) {
+    return roll.usia_kurang21 + roll.usia_u21_25 + roll.usia_u26_30;
+}
+
+function asAreaRoll(kode: string, roll: VoterRoll): AreaRoll {
+    return { kode, dpt: roll.dpt, di_bawah_30: under30Of(roll) };
+}
+
+/** Registered voters of every province. A kelurahan code starts with its two-digit province code. */
+export async function readProvinceRolls(db: D1Database): Promise<AreaRoll[]> {
+    const [result] = await db.batch([
+        db.prepare(
+            `SELECT printf('%02d', kode_kelurahan / ${KELURAHAN_PER_PROVINCE}) AS kode, ${DPT_SUMS}
+             FROM kelurahan_dpt GROUP BY 1`,
+        ),
+    ]);
+
+    return rows<VoterRoll & { dpt: number | null; kode: string }>(result).flatMap((row) =>
+        row.dpt === null || row.dpt <= 0 ? [] : [asAreaRoll(row.kode, row)],
+    );
+}
+
+/** Registered voters of the whole country. */
+export async function readNationalDpt(db: D1Database): Promise<VoterRoll | null> {
+    const [result] = await db.batch([db.prepare(`SELECT ${DPT_SUMS} FROM kelurahan_dpt`)]);
+    const roll = rows<VoterRoll & { dpt: number | null }>(result)[0];
+
+    if (roll === undefined || roll.dpt === null) {
+        return null;
+    }
+
+    return roll;
+}
+
+const DAPIL_IN_PROVINCE = `
+SELECT d.kode_dapil, k.kode_kecamatan
+FROM dapil d
+JOIN dapil_kecamatan k ON k.tingkat = d.tingkat AND k.kode_dapil = d.kode_dapil
+WHERE d.tingkat = ? AND d.kode_provinsi = ?`;
+
+// A kecamatan of this province that another dapil also holds. The other dapil may lie outside the province.
+const SHARED_KECAMATAN = `
+SELECT DISTINCT mine.kode_kecamatan
+FROM dapil_kecamatan mine
+JOIN dapil_kecamatan other
+  ON other.tingkat = mine.tingkat AND other.kode_kecamatan = mine.kode_kecamatan AND other.kode_dapil <> mine.kode_dapil
+WHERE mine.tingkat = ? AND mine.kode_dapil IN (
+  SELECT kode_dapil FROM dapil WHERE tingkat = ? AND kode_provinsi = ?
+)`;
+
+// Kelurahan of one kecamatan that vote in another dapil and not in this one.
+const ELSEWHERE_IN_RANGE = `
+SELECT DISTINCT k.kode_kelurahan
+FROM dapil_kecamatan other
+JOIN kelurahan_suara_partai k
+  ON k.tingkat = other.tingkat AND k.kode_dapil = other.kode_dapil AND k.kode_kelurahan BETWEEN ? AND ?
+WHERE other.tingkat = ? AND other.kode_kecamatan = ? AND other.kode_dapil <> ?
+  AND NOT EXISTS (
+    SELECT 1 FROM kelurahan_suara_partai here
+    WHERE here.tingkat = ? AND here.kode_dapil = ? AND here.kode_kelurahan = k.kode_kelurahan
+  )`;
+
+function addRoll(totals: Map<number, VoterRoll>, kodeDapil: number, band: DapilDptBand) {
+    const total = totals.get(kodeDapil);
+
+    if (total === undefined) {
+        totals.set(kodeDapil, { ...band });
+        return;
+    }
+
+    for (const column of DPT_COLUMNS) {
+        total[column] += band[column];
+    }
+}
+
+function subtractRoll(band: DapilDptBand, row: Pick<VoterRoll, (typeof DPT_COLUMNS)[number]>) {
+    for (const column of DPT_COLUMNS) {
+        band[column] -= row[column];
+    }
+}
+
+interface SplitKecamatan {
+    band: DapilDptBand;
+    dapil: number;
+    range: readonly [number, number];
+}
+
+async function assignSplitKecamatan(
+    db: D1Database,
+    level: number,
+    totals: Map<number, VoterRoll>,
+    splits: readonly SplitKecamatan[],
+) {
+    const excluded = await db.batch(
+        splits.map((split) =>
+            db
+                .prepare(ELSEWHERE_IN_RANGE)
+                .bind(...split.range, level, split.band.kode_kecamatan, split.dapil, level, split.dapil),
+        ),
+    );
+    const jobs = splits.map((split, index) => ({
+        codes: rows<{ kode_kelurahan: number }>(excluded[index]).map((row) => row.kode_kelurahan),
+        split,
+    }));
+    const codes = [...new Set(jobs.flatMap((job) => job.codes))];
+    const rolls = new Map<number, VoterRoll>();
+
+    if (codes.length > 0) {
+        const fetched = await db.batch(
+            chunk(codes, 90).map((group) => {
+                const marks = group.map(() => '?').join(', ');
+                return db
+                    .prepare(
+                        `SELECT kode_kelurahan, ${DPT_COLUMNS.join(', ')} FROM kelurahan_dpt WHERE kode_kelurahan IN (${marks})`,
+                    )
+                    .bind(...group);
+            }),
+        );
+
+        for (const result of fetched) {
+            for (const row of rows<Pick<DptRecord, 'kode_kelurahan' | (typeof DPT_COLUMNS)[number]>>(result)) {
+                rolls.set(row.kode_kelurahan, row);
+            }
+        }
+    }
+
+    for (const job of jobs) {
+        const band = { ...job.split.band };
+
+        for (const code of job.codes) {
+            const row = rolls.get(code);
+
+            if (row !== undefined) {
+                subtractRoll(band, row);
+            }
+        }
+
+        if (band.dpt > 0) {
+            addRoll(totals, job.split.dapil, band);
+        }
+    }
+}
+
+/** Registered voters of each dapil in a province: the total and how many are under 30. */
+export async function readDapilRolls(db: D1Database, tingkat: Tingkat, kodeProvinsi: number): Promise<AreaRoll[]> {
+    const level = TINGKAT[tingkat];
+    const [membershipResult, sharedResult] = await db.batch([
+        db.prepare(DAPIL_IN_PROVINCE).bind(level, kodeProvinsi),
+        db.prepare(SHARED_KECAMATAN).bind(level, level, kodeProvinsi),
+    ]);
+    const shared = new Set(rows<{ kode_kecamatan: string }>(sharedResult).map((row) => row.kode_kecamatan));
+    const holders = new Map<string, number[]>();
+
+    for (const row of rows<{ kode_dapil: number; kode_kecamatan: string }>(membershipResult)) {
+        if (kelurahanRange(row.kode_kecamatan) === null) {
+            continue;
+        }
+
+        holders.set(row.kode_kecamatan, [...(holders.get(row.kode_kecamatan) ?? []), row.kode_dapil]);
+    }
+
+    const ranges = [...holders.keys()].flatMap((code) => {
+        const range = kelurahanRange(code);
+        return range === null ? [] : [range];
+    });
+
+    if (ranges.length === 0) {
+        return [];
+    }
+
+    const summed = await db.batch(chunk(ranges, RANGE_CHUNK).map((group) => rangeSum(db, group)));
+    const bands = new Map<string, DapilDptBand>();
+
+    for (const result of summed) {
+        for (const band of rows<DapilDptBand>(result)) {
+            bands.set(band.kode_kecamatan, band);
+        }
+    }
+
+    const totals = new Map<number, VoterRoll>();
+    const splits: SplitKecamatan[] = [];
+
+    for (const [kecamatan, dapils] of holders) {
+        const band = bands.get(kecamatan);
+        const range = kelurahanRange(kecamatan);
+
+        if (band === undefined || band.dpt <= 0 || range === null) {
+            continue;
+        }
+
+        const onlyDapil = dapils[0];
+
+        if (!shared.has(kecamatan) && dapils.length === 1 && onlyDapil !== undefined) {
+            addRoll(totals, onlyDapil, band);
+            continue;
+        }
+
+        for (const dapil of dapils) {
+            splits.push({ band, dapil, range });
+        }
+    }
+
+    if (splits.length > 0) {
+        await assignSplitKecamatan(db, level, totals, splits);
+    }
+
+    return [...totals]
+        .flatMap(([kode, roll]) => (roll.dpt > 0 ? [asAreaRoll(String(kode), roll)] : []))
+        .sort((left, right) => left.kode.localeCompare(right.kode));
+}
+
 /** Registered voters of one province. A kelurahan code starts with its two-digit province code. */
 export async function readProvinceDpt(db: D1Database, kodeProvinsi: number): Promise<VoterRoll | null> {
     const first = kodeProvinsi * KELURAHAN_PER_PROVINCE;

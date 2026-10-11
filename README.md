@@ -83,6 +83,9 @@ returned as strings.
 | 16 | `GET /v1/2024/dpt` | Every kelurahan's registered voters: `kode_kelurahan` and `dpt`. `meta.total_dpt` is the national sum. 2019 returns 404 `tidak-tersedia` |
 | 17 | `GET /v1/2024/:tingkat/dapil/:kode_dapil/dpt` | The dapil's registered voters: total, gender, seven age bands, and each kecamatan's total. A kelurahan that votes in another dapil is left out. 2019 returns 404 `tidak-tersedia` |
 | 18 | `GET /v1/2024/provinsi/:kode/dpt` | The province's registered voters: total, gender and seven age bands, summed from kelurahan codes that start with the province. 2019 returns 404 `tidak-tersedia`. A code with no roll returns 404 `provinsi-tidak-ditemukan` |
+| 19 | `GET /v1/2024/dpt/nasional` | The same figures for the whole country |
+| 20 | `GET /v1/2024/dpt/provinsi` | Each province's total and how many are under 30 |
+| 21 | `GET /v1/2024/:tingkat/provinsi/:kode/dpt` | Each dapil of a province: total and how many are under 30. A kelurahan that votes in another dapil is left out |
 
 Answers may be kept by the caller's HTTP cache for a day. A caller that needs a changed answer sooner adds
 `__versi=<anything>` to its requests and changes the value: the parameter is accepted on every endpoint and

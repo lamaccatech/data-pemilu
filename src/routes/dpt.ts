@@ -1,5 +1,13 @@
 import type { Hono } from 'hono';
-import { type DapilDptBand, readAllKelurahanDpt, readDapilDpt, readProvinceDpt } from '../db/wilayah';
+import {
+    type DapilDptBand,
+    readAllKelurahanDpt,
+    readDapilDpt,
+    readDapilRolls,
+    readNationalDpt,
+    readProvinceDpt,
+    readProvinceRolls,
+} from '../db/wilayah';
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, fields, parseParams } from '../http/params';
@@ -16,6 +24,33 @@ export function registerDptRoutes(app: Hono<AppEnv>): void {
             return { kode_kelurahan: String(record.kode_kelurahan).padStart(10, '0'), dpt: record.dpt };
         });
         return ok(c, data, { pemilu, jumlah: data.length, total_dpt: totalDpt });
+    });
+
+    // Gender and age of the whole country, one row.
+    app.get('/v1/:pemilu/dpt/nasional', async (c) => {
+        const { pemilu, db } = await election2024(c, 'DPT kelurahan');
+        parseParams(c, {});
+        const roll = await readNationalDpt(db);
+        if (roll === null) {
+            throw notFound('tidak-tersedia', `DPT Pemilu ${pemilu} belum dimuat.`);
+        }
+        return ok(c, roll, { pemilu });
+    });
+
+    // Gender and age are not needed here: each province's total, and how many are under 30.
+    app.get('/v1/:pemilu/dpt/provinsi', async (c) => {
+        const { pemilu, db } = await election2024(c, 'DPT kelurahan');
+        parseParams(c, {});
+        const rolls = await readProvinceRolls(db);
+        return ok(c, rolls, { pemilu, jumlah: rolls.length });
+    });
+
+    // The same two figures for every dapil of one province, for colouring the map.
+    app.get('/v1/:pemilu/:tingkat/provinsi/:kode/dpt', async (c) => {
+        const { pemilu, db } = await election2024(c, 'DPT kelurahan');
+        const { tingkat, kode } = parseParams(c, { tingkat: fields.tingkat, kode: fields.provinsi });
+        const rolls = await readDapilRolls(db, tingkat, kode);
+        return ok(c, rolls, { pemilu, tingkat, kode_provinsi: String(kode).padStart(2, '0'), jumlah: rolls.length });
     });
 
     // Gender and age of one province. The roll is the villages whose code starts with the province.

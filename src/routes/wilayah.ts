@@ -104,7 +104,15 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         if (found.dapil === null) {
             throw dapilNotFound(tingkat, kode_dapil, pemilu);
         }
-        const voters = new Map(roll.bands.map((band) => [band.kode_kecamatan, band.dpt]));
+        const voters = new Map(
+            roll.bands.map((band) => [
+                band.kode_kecamatan,
+                {
+                    dpt: band.dpt,
+                    di_bawah_30: band.usia_kurang21 + band.usia_u21_25 + band.usia_u26_30,
+                },
+            ]),
+        );
         const votes = group(found.votes, (row) => String(row.kode_kecamatan));
         const kelurahan = new Map(found.kelurahanCounts.map((row) => [String(row.kode_kecamatan), row.jumlah]));
         let fromKelurahan = 0;
@@ -112,7 +120,7 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         const data = found.kecamatan.map((kecamatan) => {
             const rows = votes.get(kecamatan.kode_kecamatan);
             const place = { kode_kecamatan: kecamatan.kode_kecamatan, nama_kecamatan: kecamatan.nama_kecamatan };
-            const dpt = voters.has(kecamatan.kode_kecamatan) ? { dpt: voters.get(kecamatan.kode_kecamatan) } : null;
+            const dpt = voters.get(kecamatan.kode_kecamatan) ?? null;
             if (rows === undefined) {
                 withoutData++;
                 return { ...place, data_tersedia: false, jumlah_kelurahan_berdata: 0, ...NO_DATA, partai: [], dpt };

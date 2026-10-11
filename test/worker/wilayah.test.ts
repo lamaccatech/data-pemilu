@@ -9,7 +9,7 @@ beforeAll(async () => {
     const db = env.DB_2024;
     await db.batch([
         db.prepare(
-            "INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, jumlah_kursi, total_suara_sah) VALUES (3, 700001, 'UJI 1', 3, 300), (2, 70001, 'UJI PROV 1', 3, 0), (1, 7001, 'UJI RI', 3, 0)",
+            "INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, kode_provinsi, nama_provinsi, jumlah_kursi, total_suara_sah) VALUES (3, 700001, 'UJI 1', 70, 'UJI', 3, 300), (2, 70001, 'UJI PROV 1', 70, 'UJI', 3, 0), (1, 7001, 'UJI RI', 70, 'UJI', 3, 0)",
         ),
         db.prepare("INSERT INTO suara_partai VALUES (3, 700001, 12, 200, 'uji'), (3, 700001, 1, 100, 'uji')"),
         db.prepare(
@@ -49,7 +49,7 @@ describe('kecamatan and kelurahan endpoints', () => {
                     { kode_partai: 'pan', suara: 110 },
                     { kode_partai: 'pkb', suara: 90 },
                 ],
-                dpt: { dpt: 450 },
+                dpt: { dpt: 450, di_bawah_30: 150 },
             },
             {
                 kode_kecamatan: '700102',
@@ -225,6 +225,25 @@ describe('kecamatan and kelurahan endpoints', () => {
         expect(byCode.get('7001011004')).toBe(90);
         expect(body.meta.jumlah).toBe(body.data.length);
         expect(body.meta.total_dpt).toBe(body.data.reduce((sum: number, row: { dpt: number }) => sum + row.dpt, 0));
+    });
+
+    it('sums the national roll and each province, and the dapil of a province', async () => {
+        const national = await json('/v1/2024/dpt/nasional');
+        expect(national.status).toBe(200);
+        expect(national.body.data.dpt).toBe(540);
+        expect(national.body.data.dpt_l).toBe(250);
+
+        const provinces = await json('/v1/2024/dpt/provinsi');
+        expect(provinces.status).toBe(200);
+        expect(provinces.body.data).toEqual([{ kode: '70', dpt: 540, di_bawah_30: 180 }]);
+
+        const dapil = await json('/v1/2024/dprd_kabupaten_kota/provinsi/70/dpt');
+        expect(dapil.status).toBe(200);
+        expect(dapil.body.data).toEqual([{ kode: '700001', dpt: 450, di_bawah_30: 150 }]);
+
+        const old = await json('/v1/2019/dpt/nasional');
+        expect(old.status).toBe(404);
+        expect(old.body.error.code).toBe('tidak-tersedia');
     });
 
     it('sums the province voter roll from the kelurahan codes', async () => {
