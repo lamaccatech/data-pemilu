@@ -88,6 +88,10 @@ describe('kecamatan and kelurahan endpoints', () => {
             total_suara_sah: 100,
             persen_suara: 30,
             partai_unggul: { kode_partai: 'pan', suara: 70 },
+            partai: [
+                { kode_partai: 'pan', suara: 70 },
+                { kode_partai: 'pkb', suara: 30 },
+            ],
             dpt: {
                 dpt: 200,
                 dpt_l: 90,
@@ -272,5 +276,48 @@ describe('kecamatan and kelurahan endpoints', () => {
         const province = await json('/v1/2019/provinsi/70/dpt');
         expect(province.status).toBe(404);
         expect(province.body.error.code).toBe('tidak-tersedia');
+    });
+});
+
+describe('one party across the three levels', () => {
+    beforeAll(async () => {
+        const db = env.DB_2024;
+        await db.batch([
+            // A dpr_ri dapil of its own over the same kecamatan, so the tests above keep their figures.
+            db.prepare(
+                "INSERT INTO dapil (tingkat, kode_dapil, nama_dapil, jumlah_kursi, total_suara_sah) VALUES (1, 7002, 'UJI RI 2', 3, 0)",
+            ),
+            db.prepare("INSERT INTO dapil_kecamatan VALUES (1, 7002, '700101', 'KEC SATU')"),
+            db.prepare(
+                'INSERT INTO kelurahan_suara_partai VALUES (1, 7002, 7001011001, 12, 20), (1, 7002, 7001011001, 1, 80), (2, 70001, 7001011001, 12, 50), (2, 70001, 7001011001, 1, 50)',
+            ),
+        ]);
+    });
+
+    it('reads each kecamatan whole at every level and leaves a level without votes empty', async () => {
+        const { status, body } = await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/lintas-tingkat?partai=pan');
+        expect(status).toBe(200);
+        expect(body.data).toEqual([
+            {
+                kode_kecamatan: '700101',
+                nama_kecamatan: 'KEC SATU',
+                tingkat: {
+                    dpr_ri: { suara_partai: 20, total_suara_sah: 100, persen_suara: 20 },
+                    dprd_provinsi: { suara_partai: 50, total_suara_sah: 100, persen_suara: 50 },
+                    // Both dapil that share the kecamatan: 200 votes in 700001 and 5 in 700002.
+                    dprd_kabupaten_kota: { suara_partai: 110, total_suara_sah: 205, persen_suara: 53.66 },
+                },
+            },
+            {
+                kode_kecamatan: '700102',
+                nama_kecamatan: 'KEC DUA',
+                tingkat: { dpr_ri: null, dprd_provinsi: null, dprd_kabupaten_kota: null },
+            },
+        ]);
+    });
+
+    it('is for 2024 only and needs a party', async () => {
+        expect((await json('/v1/2019/dpr_ri/dapil/1101/lintas-tingkat?partai=pan')).status).toBe(404);
+        expect((await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/lintas-tingkat')).status).toBe(400);
     });
 });

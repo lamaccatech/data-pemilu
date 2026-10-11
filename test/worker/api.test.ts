@@ -448,3 +448,31 @@ describe('persaingan', () => {
         expect(seated.every((row: { terpilih_2019: unknown }) => row.terpilih_2019 === null)).toBe(true);
     });
 });
+
+describe('persaingan of a whole level', () => {
+    it('gives every party of every dapil with the seats it won', async () => {
+        const { status, body } = await json('/v1/2024/dpr_ri/persaingan');
+        expect(status).toBe(200);
+        const aceh = body.data.find((row: { kode_dapil: string }) => row.kode_dapil === '1101');
+        const detail = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
+        expect(aceh).toMatchObject({ nama_dapil: 'ACEH I', data_lengkap: true });
+        expect(aceh.total_suara_sah).toBe(detail.body.data.total_suara_sah);
+        expect(aceh.pemegang_kursi_terakhir).toBe(detail.body.data.pembagian_kursi.kursi_terakhir.kode_partai);
+        expect(aceh.partai).toEqual(
+            detail.body.data.partai
+                .filter((row: { suara: number }) => row.suara > 0)
+                .map(({ kode_partai, suara, kursi }: { kode_partai: string; suara: number; kursi: number }) => ({
+                    kode_partai,
+                    suara,
+                    kursi,
+                })),
+        );
+        expect(body.meta).toMatchObject({ pemilu: '2024', tingkat: 'dpr_ri', jumlah_dapil: body.data.length });
+    });
+
+    it('takes no party, and region filters for 2024 only', async () => {
+        expect((await json('/v1/2024/dpr_ri/persaingan?partai=pan')).status).toBe(400);
+        expect((await json('/v1/2019/dpr_ri/persaingan?provinsi=11')).body.error.code).toBe('tidak-tersedia');
+        expect((await json('/v1/2019/dpr_ri/persaingan')).status).toBe(200);
+    });
+});

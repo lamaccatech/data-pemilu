@@ -60,6 +60,55 @@ export async function readKecamatanVotes(db: D1Database, tingkat: Tingkat, kodeD
     };
 }
 
+export interface KecamatanLevelVotes {
+    kode_kecamatan: string;
+    total: number;
+    partai: number;
+}
+
+// The kecamatan of one dapil, read at another level: that level's dapil are found through the kecamatan
+// index, then one key range of kelurahan votes for each. A kecamatan is taken whole, so where two dapil of
+// a level share it, both halves are summed. CROSS JOIN fixes the order, so the vote table is never read by level alone.
+const KECAMATAN_AT_LEVEL = `
+SELECT mine.kode_kecamatan AS kode_kecamatan,
+       SUM(k.suara) AS total,
+       SUM(CASE WHEN k.partai_id = ? THEN k.suara ELSE 0 END) AS partai
+FROM dapil_kecamatan mine
+CROSS JOIN dapil_kecamatan other
+  ON other.tingkat = ? AND other.kode_kecamatan = mine.kode_kecamatan
+CROSS JOIN kelurahan_suara_partai k
+  ON k.tingkat = other.tingkat AND k.kode_dapil = other.kode_dapil
+ AND k.kode_kelurahan BETWEEN CAST(mine.kode_kecamatan AS INTEGER) * ${KELURAHAN_PER_KECAMATAN}
+                        AND CAST(mine.kode_kecamatan AS INTEGER) * ${KELURAHAN_PER_KECAMATAN} + ${KELURAHAN_PER_KECAMATAN - 1}
+WHERE mine.tingkat = ? AND mine.kode_dapil = ?
+  AND mine.kode_kecamatan GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'
+GROUP BY mine.kode_kecamatan`;
+
+/** One party's votes and the valid votes in every kecamatan of a dapil, at each of the three levels. */
+export async function readKecamatanAcrossLevels(db: D1Database, tingkat: Tingkat, kodeDapil: number, partyId: number) {
+    const level = TINGKAT[tingkat];
+    const levels = Object.keys(TINGKAT) as Tingkat[];
+    const [dapil, kecamatan, ...perLevel] = await db.batch([
+        db.prepare(DAPIL).bind(level, kodeDapil),
+        db
+            .prepare(
+                'SELECT kode_kecamatan, nama_kecamatan FROM dapil_kecamatan WHERE tingkat = ? AND kode_dapil = ? ORDER BY kode_kecamatan',
+            )
+            .bind(level, kodeDapil),
+        ...levels.map((other) => db.prepare(KECAMATAN_AT_LEVEL).bind(partyId, TINGKAT[other], level, kodeDapil)),
+    ]);
+    return {
+        dapil: rows<DapilName>(dapil)[0] ?? null,
+        kecamatan: rows<{ kode_kecamatan: string; nama_kecamatan: string }>(kecamatan),
+        votes: new Map(
+            levels.map((other, index) => [
+                other,
+                new Map(rows<KecamatanLevelVotes>(perLevel[index]).map((row) => [row.kode_kecamatan, row])),
+            ]),
+        ),
+    };
+}
+
 export interface DapilDptBand {
     kode_kecamatan: string;
     dpt: number;
@@ -85,12 +134,13 @@ const RANGE_CHUNK = 40;
 // Kelurahan that vote in another dapil sharing a kecamatan, and not in this one. A scan of
 // `kode_dapil <> ?` across the vote table does not use the primary key, so this stays on the
 // kecamatan index and one key range per other dapil.
+// CROSS JOIN fixes that order: left to itself the planner starts from the vote table and reads a whole level.
 const EXCLUDED_KELURAHAN = `
 SELECT DISTINCT k.kode_kelurahan
 FROM dapil_kecamatan mine
-JOIN dapil_kecamatan other
+CROSS JOIN dapil_kecamatan other
   ON other.tingkat = mine.tingkat AND other.kode_kecamatan = mine.kode_kecamatan AND other.kode_dapil <> mine.kode_dapil
-JOIN kelurahan_suara_partai k
+CROSS JOIN kelurahan_suara_partai k
   ON k.tingkat = other.tingkat AND k.kode_dapil = other.kode_dapil
  AND k.kode_kelurahan BETWEEN CAST(mine.kode_kecamatan AS INTEGER) * ${KELURAHAN_PER_KECAMATAN}
                         AND CAST(mine.kode_kecamatan AS INTEGER) * ${KELURAHAN_PER_KECAMATAN} + ${KELURAHAN_PER_KECAMATAN - 1}

@@ -75,6 +75,32 @@ export async function readDapilList(db: D1Database, tingkat: Tingkat, partyId: n
     };
 }
 
+/** Every dapil of a level with all party votes, and no candidates. Two queries, one round trip. */
+export async function readDapilVotes(db: D1Database, tingkat: Tingkat, filter: DapilFilter) {
+    const level = TINGKAT[tingkat];
+    const conditions = ['tingkat = ?'];
+    const scopeArgs: number[] = [level];
+    if (filter.provinsi !== undefined) {
+        conditions.push('kode_provinsi = ?');
+        scopeArgs.push(filter.provinsi);
+    }
+    if (filter.kabupaten !== undefined) {
+        conditions.push('kode_kabupaten = ?');
+        scopeArgs.push(filter.kabupaten);
+    }
+    const scope = conditions.join(' AND ');
+    // Without a region filter the level itself is the scope, so the subquery is left out.
+    const filtered = scopeArgs.length > 1;
+    const inScope = filtered ? ` AND kode_dapil IN (SELECT kode_dapil FROM dapil WHERE ${scope})` : '';
+    const [dapil, votes] = await db.batch([
+        db.prepare(`SELECT ${DAPIL_COLUMNS} FROM dapil WHERE ${scope} ORDER BY kode_dapil`).bind(...scopeArgs),
+        db
+            .prepare(`SELECT kode_dapil, partai_id, suara FROM suara_partai WHERE tingkat = ?${inScope}`)
+            .bind(level, ...(filtered ? scopeArgs : [])),
+    ]);
+    return { dapil: rows<DapilRecord>(dapil), votes: rows<Omit<PartyVotesRecord, 'sumber'>>(votes) };
+}
+
 /** One dapil with its party votes and candidates: all of them, or one party's when `partyId` is given. */
 export async function readDapil(db: D1Database, tingkat: Tingkat, kodeDapil: number, partyId?: number) {
     const level = TINGKAT[tingkat];

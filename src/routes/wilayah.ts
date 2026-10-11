@@ -4,6 +4,7 @@ import { type Election, partyCode, requireParty } from '../db/election';
 import {
     type AreaCandidateRecord,
     readDapilDpt,
+    readKecamatanAcrossLevels,
     readKecamatanCandidates,
     readKecamatanVotes,
     readKelurahanCandidates,
@@ -12,6 +13,7 @@ import {
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, fields, optionalParty, parseParams } from '../http/params';
+import { TINGKAT_NAMES } from '../tingkat';
 
 const ONLY_2024 = 'Data kelurahan dan kecamatan';
 
@@ -49,6 +51,14 @@ function summariseArea(election: Election, votes: readonly PartyVotes[], focusPa
 }
 
 const NO_DATA = { suara_partai: null, total_suara_sah: null, persen_suara: null, partai_unggul: null };
+
+/** Every party with votes in an area, most votes first. */
+function rankParties(election: Election, votes: readonly PartyVotes[]) {
+    return votes
+        .filter((row) => row.suara > 0)
+        .sort((a, b) => b.suara - a.suara || a.partai_id - b.partai_id)
+        .map((row) => ({ kode_partai: partyCode(election, row.partai_id), suara: row.suara }));
+}
 
 function viewCandidates(election: Election, candidates: readonly AreaCandidateRecord[]) {
     return candidates.map((row) => ({
@@ -176,6 +186,7 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
                 nama_kelurahan: roll?.nama_kelurahan ?? null,
                 data_tersedia: rows !== undefined,
                 ...(rows === undefined ? NO_DATA : summariseArea(election, rows, party.partai_id)),
+                partai: rows === undefined ? [] : rankParties(election, rows),
                 dpt: voters,
             };
         });
@@ -192,6 +203,50 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             kelurahan_tanpa_data: withoutData,
             // Other dapil that share this kecamatan. A kelurahan without data may belong to one of them.
             dapil_lain: found.holders.filter((holder) => holder !== kode_dapil).map(String),
+        });
+    });
+
+    // 17. One party in every kecamatan of a dapil at all three levels, to see where its vote for one
+    // council runs ahead of its vote for another. A kecamatan is read whole at every level.
+    app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/lintas-tingkat', async (c) => {
+        const { pemilu, election, db } = await election2024(c, ONLY_2024);
+        const { tingkat, kode_dapil, partai } = parseParams(c, {
+            tingkat: fields.tingkat,
+            kode_dapil: fields.kode_dapil,
+            partai: fields.partai,
+        });
+        const party = requireParty(election, partai);
+        const found = await readKecamatanAcrossLevels(db, tingkat, kode_dapil, party.partai_id);
+        if (found.dapil === null) {
+            throw dapilNotFound(tingkat, kode_dapil, pemilu);
+        }
+        const data = found.kecamatan.map((kecamatan) => ({
+            kode_kecamatan: kecamatan.kode_kecamatan,
+            nama_kecamatan: kecamatan.nama_kecamatan,
+            // Null where the level has no kelurahan votes for the kecamatan, or no such council at all.
+            tingkat: Object.fromEntries(
+                TINGKAT_NAMES.map((level) => {
+                    const votes = found.votes.get(level)?.get(kecamatan.kode_kecamatan);
+                    return [
+                        level,
+                        votes === undefined || votes.total <= 0
+                            ? null
+                            : {
+                                  suara_partai: votes.partai,
+                                  total_suara_sah: votes.total,
+                                  persen_suara: round2((votes.partai / votes.total) * 100),
+                              },
+                    ];
+                }),
+            ),
+        }));
+        return ok(c, data, {
+            pemilu,
+            tingkat,
+            kode_dapil: String(found.dapil.kode_dapil),
+            nama_dapil: found.dapil.nama_dapil,
+            partai,
+            jumlah_kecamatan: data.length,
         });
     });
 

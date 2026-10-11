@@ -179,6 +179,67 @@ export function earlierOf(competition: Competition, candidates: readonly Candida
     };
 }
 
+/** One dapil in the overview of a level: who got what, without the per-party analysis. */
+export interface DapilStandings {
+    kode_dapil: string;
+    nama_dapil: string;
+    kode_provinsi: string | null;
+    jumlah_kursi: number | null;
+    total_suara_sah: number | null;
+    /** False when the dapil has no party votes (or no seat count); the rest is then empty. */
+    data_lengkap: boolean;
+    /** Parties with votes, most votes first. */
+    partai: { kode_partai: string; suara: number; kursi: number }[];
+    /** The party that won the seat with the smallest quotient. */
+    pemegang_kursi_terakhir: string | null;
+}
+
+/** Votes and seats of every party in one dapil, for drawing a whole level at once. */
+export function viewStandings(
+    election: Election,
+    tingkat: Tingkat,
+    dapil: DapilRecord,
+    votesByParty: VotesByParty,
+): DapilStandings {
+    const place = {
+        kode_dapil: String(dapil.kode_dapil),
+        nama_dapil: dapil.nama_dapil,
+        kode_provinsi: dapil.kode_provinsi === null ? null : String(dapil.kode_provinsi),
+        jumlah_kursi: dapil.jumlah_kursi,
+    };
+    const seats = dapil.jumlah_kursi;
+    let total = 0;
+    for (const votes of votesByParty.values()) {
+        total += votes;
+    }
+    if (seats === null || total <= 0) {
+        return { ...place, total_suara_sah: null, data_lengkap: false, partai: [], pemegang_kursi_terakhir: null };
+    }
+    const winners = rankQuotients(countedVotes(votesByParty, eligibleParties(election, tingkat)), seats).slice(
+        0,
+        seats,
+    );
+    const seatsByParty = new Map<number, number>();
+    for (const winner of winners) {
+        seatsByParty.set(winner.partai_id, (seatsByParty.get(winner.partai_id) ?? 0) + 1);
+    }
+    const last = winners.at(-1);
+    return {
+        ...place,
+        total_suara_sah: total,
+        data_lengkap: true,
+        partai: [...votesByParty]
+            .filter(([, votes]) => votes > 0)
+            .sort(([idA, votesA], [idB, votesB]) => votesB - votesA || idA - idB)
+            .map(([partyId, votes]) => ({
+                kode_partai: partyCode(election, partyId),
+                suara: votes,
+                kursi: seatsByParty.get(partyId) ?? 0,
+            })),
+        pemegang_kursi_terakhir: last === undefined ? null : partyCode(election, last.partai_id),
+    };
+}
+
 /**
  * Every party of a dapil side by side: how firmly each holds its seats, what one more would cost, how much
  * of its vote is personal, and the order the seats were won in. Null when the dapil cannot be calculated.

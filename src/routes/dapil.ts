@@ -1,12 +1,12 @@
 import type { Hono } from 'hono';
 import { countedVotes, findStandouts, normalizePersonName, rankQuotients, round2 } from '../calc';
-import { readAliases, readDapil, readDapilList, readPadanan, readPadananList } from '../db/dapil';
+import { readAliases, readDapil, readDapilList, readDapilVotes, readPadanan, readPadananList } from '../db/dapil';
 import { eligibleParties, loadElection, partyCode, requireParty } from '../db/election';
 import { notFound } from '../errors';
 import { type AppEnv, ok } from '../http/context';
 import { dapilNotFound, election2024, electionOf, fields, optionalParty, parseParams } from '../http/params';
 import { type DapilView, groupByDapil, summariseViews, viewDapil, votesMap } from '../service/dapil';
-import { type Earlier, earlierOf, viewCompetition } from '../service/persaingan';
+import { type Earlier, earlierOf, viewCompetition, viewStandings } from '../service/persaingan';
 import { TINGKAT, TINGKAT_NAMES, type Tingkat } from '../tingkat';
 
 /**
@@ -131,6 +131,33 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 ).view,
         );
         return ok(c, data, { pemilu, tingkat, partai, ...summariseViews(data) });
+    });
+
+    // 16. Every dapil of a level with every party's votes and seats, for drawing the contest on a map.
+    app.get('/v1/:pemilu/:tingkat/persaingan', async (c) => {
+        const { pemilu, election, db } = await electionOf(c);
+        const { tingkat, provinsi, kabupaten } = parseParams(c, {
+            tingkat: fields.tingkat,
+            provinsi: fields.provinsi.optional(),
+            kabupaten: fields.kabupaten.optional(),
+        });
+        if (pemilu === '2019' && (provinsi !== undefined || kabupaten !== undefined)) {
+            throw notFound(
+                'tidak-tersedia',
+                'Hasil Pemilu 2019 tidak memuat kode provinsi dan kabupaten, sehingga saringan wilayah hanya tersedia untuk Pemilu 2024.',
+            );
+        }
+        const list = await readDapilVotes(db, tingkat, { provinsi, kabupaten });
+        const votes = groupByDapil(list.votes);
+        const data = list.dapil.map((dapil) =>
+            viewStandings(election, tingkat, dapil, votesMap(votes.get(dapil.kode_dapil) ?? [])),
+        );
+        return ok(c, data, {
+            pemilu,
+            tingkat,
+            jumlah_dapil: data.length,
+            dapil_tanpa_data: data.filter((row) => !row.data_lengkap).length,
+        });
     });
 
     // 3. One dapil: every party's votes and seats, and the quotients around the last seat.
