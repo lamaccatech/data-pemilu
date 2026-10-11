@@ -60,6 +60,162 @@ export async function readKecamatanVotes(db: D1Database, tingkat: Tingkat, kodeD
     };
 }
 
+export interface DapilDptBand {
+    kode_kecamatan: string;
+    dpt: number;
+    dpt_l: number;
+    dpt_p: number;
+    usia_kurang21: number;
+    usia_u21_25: number;
+    usia_u26_30: number;
+    usia_u31_40: number;
+    usia_u41_50: number;
+    usia_u51_55: number;
+    usia_lebih55: number;
+}
+
+const DPT_SUMS = `SUM(dpt) AS dpt, SUM(dpt_l) AS dpt_l, SUM(dpt_p) AS dpt_p,
+    SUM(usia_kurang21) AS usia_kurang21, SUM(usia_u21_25) AS usia_u21_25, SUM(usia_u26_30) AS usia_u26_30,
+    SUM(usia_u31_40) AS usia_u31_40, SUM(usia_u41_50) AS usia_u41_50, SUM(usia_u51_55) AS usia_u51_55,
+    SUM(usia_lebih55) AS usia_lebih55`;
+
+// Two binds per range, and D1 allows 100 bound parameters on one statement.
+const RANGE_CHUNK = 40;
+
+// Kelurahan that vote in another dapil sharing a kecamatan, and not in this one. A scan of
+// `kode_dapil <> ?` across the vote table does not use the primary key, so this stays on the
+// kecamatan index and one key range per other dapil.
+const EXCLUDED_KELURAHAN = `
+SELECT DISTINCT k.kode_kelurahan
+FROM dapil_kecamatan mine
+JOIN dapil_kecamatan other
+  ON other.tingkat = mine.tingkat AND other.kode_kecamatan = mine.kode_kecamatan AND other.kode_dapil <> mine.kode_dapil
+JOIN kelurahan_suara_partai k
+  ON k.tingkat = other.tingkat AND k.kode_dapil = other.kode_dapil
+ AND k.kode_kelurahan BETWEEN CAST(mine.kode_kecamatan AS INTEGER) * ${KELURAHAN_PER_KECAMATAN}
+                        AND CAST(mine.kode_kecamatan AS INTEGER) * ${KELURAHAN_PER_KECAMATAN} + ${KELURAHAN_PER_KECAMATAN - 1}
+WHERE mine.tingkat = ? AND mine.kode_dapil = ?
+  AND mine.kode_kecamatan GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'
+  AND NOT EXISTS (
+    SELECT 1 FROM kelurahan_suara_partai here
+    WHERE here.tingkat = mine.tingkat AND here.kode_dapil = mine.kode_dapil AND here.kode_kelurahan = k.kode_kelurahan
+  )`;
+
+const DPT_COLUMNS = [
+    'dpt',
+    'dpt_l',
+    'dpt_p',
+    'usia_kurang21',
+    'usia_u21_25',
+    'usia_u26_30',
+    'usia_u31_40',
+    'usia_u41_50',
+    'usia_u51_55',
+    'usia_lebih55',
+] as const;
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let index = 0; index < items.length; index += size) {
+        chunks.push(items.slice(index, index + size));
+    }
+    return chunks;
+}
+
+function rangeSum(db: D1Database, ranges: readonly (readonly [number, number])[]) {
+    const where = ranges.map(() => 'kode_kelurahan BETWEEN ? AND ?').join(' OR ');
+    return db
+        .prepare(
+            `SELECT printf('%06d', kode_kelurahan / ${KELURAHAN_PER_KECAMATAN}) AS kode_kecamatan, ${DPT_SUMS}
+             FROM kelurahan_dpt WHERE ${where} GROUP BY 1`,
+        )
+        .bind(...ranges.flat());
+}
+
+async function subtractExcluded(db: D1Database, bands: Map<string, DapilDptBand>, codes: readonly number[]) {
+    const fetched = await db.batch(
+        chunk(codes, 90).map((group) => {
+            const marks = group.map(() => '?').join(', ');
+            return db
+                .prepare(
+                    `SELECT kode_kelurahan, ${DPT_COLUMNS.join(', ')} FROM kelurahan_dpt WHERE kode_kelurahan IN (${marks})`,
+                )
+                .bind(...group);
+        }),
+    );
+    for (const result of fetched) {
+        for (const row of rows<Pick<DptRecord, 'kode_kelurahan' | (typeof DPT_COLUMNS)[number]>>(result)) {
+            const code = String(Math.floor(row.kode_kelurahan / KELURAHAN_PER_KECAMATAN)).padStart(6, '0');
+            const band = bands.get(code);
+            if (band === undefined) {
+                continue;
+            }
+            for (const column of DPT_COLUMNS) {
+                band[column] -= row[column];
+            }
+        }
+    }
+}
+
+const KELURAHAN_PER_PROVINCE = 100_000_000;
+
+export type VoterRoll = Omit<DapilDptBand, 'kode_kecamatan'>;
+
+/** Registered voters of one province. A kelurahan code starts with its two-digit province code. */
+export async function readProvinceDpt(db: D1Database, kodeProvinsi: number): Promise<VoterRoll | null> {
+    const first = kodeProvinsi * KELURAHAN_PER_PROVINCE;
+    const [result] = await db.batch([
+        db
+            .prepare(`SELECT ${DPT_SUMS} FROM kelurahan_dpt WHERE kode_kelurahan BETWEEN ? AND ?`)
+            .bind(first, first + KELURAHAN_PER_PROVINCE - 1),
+    ]);
+    const roll = rows<VoterRoll & { dpt: number | null }>(result)[0];
+    if (roll === undefined || roll.dpt === null) {
+        return null;
+    }
+    return roll;
+}
+
+/** Registered voters of a dapil, summed per kecamatan from the kelurahan roll. */
+export async function readDapilDpt(db: D1Database, tingkat: Tingkat, kodeDapil: number) {
+    const level = TINGKAT[tingkat];
+    const [dapilResult, kecamatanResult] = await db.batch([
+        db.prepare(DAPIL).bind(level, kodeDapil),
+        db
+            .prepare('SELECT kode_kecamatan FROM dapil_kecamatan WHERE tingkat = ? AND kode_dapil = ?')
+            .bind(level, kodeDapil),
+    ]);
+    const dapil = rows<DapilName>(dapilResult)[0] ?? null;
+    const ranges = rows<{ kode_kecamatan: string }>(kecamatanResult).flatMap((row) => {
+        const range = kelurahanRange(row.kode_kecamatan);
+        return range === null ? [] : [range];
+    });
+    if (ranges.length === 0) {
+        return { dapil, bands: [] as DapilDptBand[] };
+    }
+
+    const results = await db.batch([
+        ...chunk(ranges, RANGE_CHUNK).map((group) => rangeSum(db, group)),
+        db.prepare(EXCLUDED_KELURAHAN).bind(level, kodeDapil),
+    ]);
+    const bands = new Map<string, DapilDptBand>();
+    for (const result of results.slice(0, -1)) {
+        for (const band of rows<DapilDptBand>(result)) {
+            bands.set(band.kode_kecamatan, band);
+        }
+    }
+    const excluded = rows<{ kode_kelurahan: number }>(results.at(-1)).map((row) => row.kode_kelurahan);
+    if (excluded.length > 0) {
+        await subtractExcluded(db, bands, excluded);
+    }
+    return {
+        dapil,
+        bands: [...bands.values()]
+            .filter((band) => band.dpt > 0)
+            .sort((left, right) => left.kode_kecamatan.localeCompare(right.kode_kecamatan)),
+    };
+}
+
 export interface DptRecord {
     kode_kelurahan: number;
     nama_kelurahan: string;

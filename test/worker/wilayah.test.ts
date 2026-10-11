@@ -49,6 +49,7 @@ describe('kecamatan and kelurahan endpoints', () => {
                     { kode_partai: 'pan', suara: 110 },
                     { kode_partai: 'pkb', suara: 90 },
                 ],
+                dpt: { dpt: 450 },
             },
             {
                 kode_kecamatan: '700102',
@@ -60,6 +61,7 @@ describe('kecamatan and kelurahan endpoints', () => {
                 persen_suara: null,
                 partai_unggul: null,
                 partai: [],
+                dpt: null,
             },
         ]);
         expect(body.meta).toMatchObject({
@@ -221,9 +223,54 @@ describe('kecamatan and kelurahan endpoints', () => {
         expect(body.meta.total_dpt).toBe(body.data.reduce((sum: number, row: { dpt: number }) => sum + row.dpt, 0));
     });
 
+    it('sums the province voter roll from the kelurahan codes', async () => {
+        const { status, body } = await json('/v1/2024/provinsi/70/dpt');
+        expect(status).toBe(200);
+        expect(body.data).toEqual({
+            dpt: 540,
+            dpt_l: 250,
+            dpt_p: 290,
+            usia_kurang21: 40,
+            usia_u21_25: 60,
+            usia_u26_30: 80,
+            usia_u31_40: 110,
+            usia_u41_50: 120,
+            usia_u51_55: 50,
+            usia_lebih55: 80,
+        });
+        expect(body.meta.kode_provinsi).toBe('70');
+        const missing = await json('/v1/2024/provinsi/10/dpt');
+        expect(missing.status).toBe(404);
+        expect(missing.body.error.code).toBe('provinsi-tidak-ditemukan');
+    });
+
+    it('sums the dapil voter roll, leaving out a kelurahan that votes in another dapil', async () => {
+        const { status, body } = await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/dpt');
+        expect(status).toBe(200);
+        expect(body.data).toEqual({
+            dpt: 450,
+            dpt_l: 210,
+            dpt_p: 240,
+            usia_kurang21: 30,
+            usia_u21_25: 50,
+            usia_u26_30: 70,
+            usia_u31_40: 90,
+            usia_u41_50: 100,
+            usia_u51_55: 40,
+            usia_lebih55: 70,
+            kecamatan: [{ kode_kecamatan: '700101', dpt: 450 }],
+        });
+    });
+
     it('has no kelurahan DPT for 2019', async () => {
         const { status, body } = await json('/v1/2019/dpt');
         expect(status).toBe(404);
         expect(body.error.code).toBe('tidak-tersedia');
+        const dapil = await json('/v1/2019/dpr_ri/dapil/1101/dpt');
+        expect(dapil.status).toBe(404);
+        expect(dapil.body.error.code).toBe('tidak-tersedia');
+        const province = await json('/v1/2019/provinsi/70/dpt');
+        expect(province.status).toBe(404);
+        expect(province.body.error.code).toBe('tidak-tersedia');
     });
 });

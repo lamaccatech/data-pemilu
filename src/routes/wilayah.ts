@@ -3,6 +3,7 @@ import { round2 } from '../calc';
 import { type Election, partyCode, requireParty } from '../db/election';
 import {
     type AreaCandidateRecord,
+    readDapilDpt,
     readKecamatanCandidates,
     readKecamatanVotes,
     readKelurahanCandidates,
@@ -85,10 +86,14 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             partai: fields.partai,
         });
         const party = requireParty(election, partai);
-        const found = await readKecamatanVotes(db, tingkat, kode_dapil, party.partai_id);
+        const [found, roll] = await Promise.all([
+            readKecamatanVotes(db, tingkat, kode_dapil, party.partai_id),
+            readDapilDpt(db, tingkat, kode_dapil),
+        ]);
         if (found.dapil === null) {
             throw dapilNotFound(tingkat, kode_dapil, pemilu);
         }
+        const voters = new Map(roll.bands.map((band) => [band.kode_kecamatan, band.dpt]));
         const votes = group(found.votes, (row) => String(row.kode_kecamatan));
         const kelurahan = new Map(found.kelurahanCounts.map((row) => [String(row.kode_kecamatan), row.jumlah]));
         let fromKelurahan = 0;
@@ -96,9 +101,10 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         const data = found.kecamatan.map((kecamatan) => {
             const rows = votes.get(kecamatan.kode_kecamatan);
             const place = { kode_kecamatan: kecamatan.kode_kecamatan, nama_kecamatan: kecamatan.nama_kecamatan };
+            const dpt = voters.has(kecamatan.kode_kecamatan) ? { dpt: voters.get(kecamatan.kode_kecamatan) } : null;
             if (rows === undefined) {
                 withoutData++;
-                return { ...place, data_tersedia: false, jumlah_kelurahan_berdata: 0, ...NO_DATA, partai: [] };
+                return { ...place, data_tersedia: false, jumlah_kelurahan_berdata: 0, ...NO_DATA, partai: [], dpt };
             }
             const summary = summariseArea(election, rows, party.partai_id);
             fromKelurahan += summary.suara_partai;
@@ -107,6 +113,7 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
                 data_tersedia: true,
                 jumlah_kelurahan_berdata: kelurahan.get(kecamatan.kode_kecamatan) ?? 0,
                 ...summary,
+                dpt,
                 partai: rows
                     .map((row) => ({ kode_partai: partyCode(election, row.partai_id), suara: row.suara }))
                     .sort((a, b) => b.suara - a.suara),
