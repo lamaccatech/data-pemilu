@@ -58,7 +58,8 @@ describe('kecamatan and kelurahan endpoints', () => {
                     { kode_partai: 'pan', suara: 110 },
                     { kode_partai: 'pkb', suara: 90 },
                 ],
-                dpt: { dpt: 450, di_bawah_30: 150 },
+                // DESA C has votes in neither dapil that holds this kecamatan, so it is in neither roll.
+                dpt: { dpt: 350, di_bawah_30: 120 },
             },
             {
                 kode_kecamatan: '700102',
@@ -248,7 +249,8 @@ describe('kecamatan and kelurahan endpoints', () => {
 
         const dapil = await json('/v1/2024/dprd_kabupaten_kota/provinsi/70/dpt');
         expect(dapil.status).toBe(200);
-        expect(dapil.body.data).toEqual([{ kode: '700001', dpt: 450, di_bawah_30: 150 }]);
+        // The one dapil with a roll shares its kecamatan, and a kelurahan there belongs to no dapil: no roll.
+        expect(dapil.body.data).toEqual([]);
 
         const old = await json('/v1/2019/dpt/nasional');
         expect(old.status).toBe(404);
@@ -276,21 +278,24 @@ describe('kecamatan and kelurahan endpoints', () => {
         expect(missing.body.error.code).toBe('provinsi-tidak-ditemukan');
     });
 
-    it('sums the dapil voter roll, leaving out a kelurahan that votes in another dapil', async () => {
+    it('sums the dapil voter roll, leaving out what votes in another dapil and what can be given to none', async () => {
         const { status, body } = await json('/v1/2024/dprd_kabupaten_kota/dapil/700001/dpt');
         expect(status).toBe(200);
         expect(body.data).toEqual({
-            dpt: 450,
-            dpt_l: 210,
-            dpt_p: 240,
-            usia_kurang21: 30,
-            usia_u21_25: 50,
-            usia_u26_30: 70,
-            usia_u31_40: 90,
-            usia_u41_50: 100,
-            usia_u51_55: 40,
-            usia_lebih55: 70,
-            kecamatan: [{ kode_kecamatan: '700101', dpt: 450 }],
+            dpt: 350,
+            dpt_l: 160,
+            dpt_p: 190,
+            usia_kurang21: 20,
+            usia_u21_25: 40,
+            usia_u26_30: 60,
+            usia_u31_40: 70,
+            usia_u41_50: 80,
+            usia_u51_55: 30,
+            usia_lebih55: 50,
+            kecamatan: [{ kode_kecamatan: '700101', dpt: 350 }],
+            // DESA D votes in dapil 700002 and is left out. DESA C has votes in neither dapil of the
+            // kecamatan: its 100 voters are reported as undivided, and the roll is incomplete.
+            belum_terbagi: { kelurahan: 1, dpt: 100 },
         });
     });
 

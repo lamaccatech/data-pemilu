@@ -134,8 +134,8 @@ in the same order as endpoint 2 with the same `provinsi`, so the two join on `ko
 - `kecamatan_tanpa_batas` counts kecamatan without a shape; the outline has a hole or a notch there. That
   affects 5 `dpr_ri`, 7 `dprd_provinsi` and 14 `dprd_kabupaten_kota` dapil. The overseas polling places of
   DKI JAKARTA II are not counted and not drawn.
-- 26 `dprd_kabupaten_kota` dapil have `geometry: null`. Each consists of one kecamatan that the data also
-  gives to a neighbouring dapil, and no kelurahan votes say which part is whose. Kecamatan shared by two
+- 5 `dprd_kabupaten_kota` dapil have `geometry: null` (JAYAPURA 1 and 2, NABIRE 1 and 2, MIMIKA 1). Each consists
+  of one kecamatan that the data also gives to a neighbouring dapil, and no kelurahan votes say which part is whose. Kecamatan shared by two
   dapil are otherwise divided by kelurahan, each going to the dapil it has votes in.
 
 ### Classification
@@ -201,15 +201,16 @@ Served as they are; fix them in the export, not here.
 - **Party votes per kelurahan are repeated in places.** In 58 `dprd_provinsi` dapil (Aceh, Sumatera Utara,
   Sumatera Barat, Riau, Jambi, Sumatera Selatan, Maluku Utara and others) every kelurahan value in
   `kelurahan_suara_partai_2024.csv` is even and the sums are twice the dapil votes: PAN in ACEH 7 has 28,714
-  votes in the dapil and 57,436 over its kelurahan. 41 `dprd_kabupaten_kota` and 3 `dpr_ri` dapil
+  votes in the dapil and 57,436 over its kelurahan. 20 `dprd_kabupaten_kota` and 3 `dpr_ri` dapil
   (NUSA TENGGARA TIMUR I, KALIMANTAN SELATAN II, SULAWESI TENGGARA) fail the same check by less. The
   `sebaran_partai` check withholds them; correct the export to bring them back.
 - **Some dapil mark no winner.** 65 `dprd_kabupaten_kota` dapil of 2024 and 11 of 2019 have party votes and
   candidates, and no candidate with a seat. See `pemenang_ditandai`.
-- **A kecamatan shared by two `dprd_kabupaten_kota` dapil is divided by which kelurahan have votes where.**
-  Where one side has no kelurahan votes the roll goes wholly to the other (20 dapil have no roll, and their
-  neighbour has too much), and where neither side has any, both get the whole kecamatan (three kecamatan in
-  Papua, 195,291 voters counted twice). Not corrected yet.
+- **Three kecamatan shared by `dprd_kabupaten_kota` dapil cannot be divided.** A shared kecamatan is divided
+  by which dapil each kelurahan has votes in (the export works that out from the dapil pages of the source).
+  JAYAPURA 1 and 2, NABIRE 1 and 2, and five kelurahan of MIMIKA 1, 2 and 3 have no votes to divide by. Those
+  voters are in no dapil's roll: the dapil DPT endpoint reports them as `belum_terbagi`, and the list of
+  dapil rolls of a province leaves such a dapil out. Five of the seven dapil have `geometry: null`.
 - `kelurahan_suara_caleg_2024.csv` has 2,058 rows (kabupaten 9110) whose `kode_dapil` is `#N/A`. `build-sql`
   restores it from the kecamatan of the kelurahan, which names exactly one dapil (9101), and prints the count.
 - `nama_kabupaten` is empty for every 2024 `dprd_kabupaten_kota` dapil.

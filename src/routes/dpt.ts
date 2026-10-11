@@ -72,12 +72,22 @@ export function registerDptRoutes(app: Hono<AppEnv>): void {
         if (found.dapil === null) {
             throw dapilNotFound(tingkat, kode_dapil, pemilu);
         }
-        return ok(c, summariseDapilDpt(found.bands), {
-            pemilu,
-            tingkat,
-            kode_dapil: String(found.dapil.kode_dapil),
-            nama_dapil: found.dapil.nama_dapil,
-        });
+        return ok(
+            c,
+            {
+                ...summariseDapilDpt(found.bands),
+                // Voters of a kecamatan shared with another dapil whose kelurahan have votes in neither. They
+                // are in no dapil's roll, so above zero this roll is incomplete and should not be read as the
+                // dapil's.
+                belum_terbagi: found.unplaced,
+            },
+            {
+                pemilu,
+                tingkat,
+                kode_dapil: String(found.dapil.kode_dapil),
+                nama_dapil: found.dapil.nama_dapil,
+            },
+        );
     });
 }
 

@@ -277,6 +277,39 @@ WHERE mine.tingkat = ? AND mine.kode_dapil = ?
     WHERE here.tingkat = mine.tingkat AND here.kode_dapil = mine.kode_dapil AND here.kode_kelurahan = k.kode_kelurahan
   )`;
 
+// Kelurahan of a kecamatan this dapil shares with another, with votes in none of the dapil that hold
+// it. Nothing says which dapil such a kelurahan votes in, so it is counted for none of them.
+const UNPLACED_KELURAHAN = `
+SELECT r.kode_kelurahan AS kode_kelurahan, r.dpt AS dpt
+FROM dapil_kecamatan mine
+CROSS JOIN kelurahan_dpt r
+  ON r.kode_kelurahan BETWEEN CAST(mine.kode_kecamatan AS INTEGER) * ${KELURAHAN_PER_KECAMATAN}
+                        AND CAST(mine.kode_kecamatan AS INTEGER) * ${KELURAHAN_PER_KECAMATAN} + ${KELURAHAN_PER_KECAMATAN - 1}
+WHERE mine.tingkat = ? AND mine.kode_dapil = ?
+  AND mine.kode_kecamatan GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'
+  AND EXISTS (
+    SELECT 1 FROM dapil_kecamatan other
+    WHERE other.tingkat = mine.tingkat AND other.kode_kecamatan = mine.kode_kecamatan AND other.kode_dapil <> mine.kode_dapil
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM dapil_kecamatan holder
+    CROSS JOIN kelurahan_suara_partai k
+      ON k.tingkat = holder.tingkat AND k.kode_dapil = holder.kode_dapil AND k.kode_kelurahan = r.kode_kelurahan
+    WHERE holder.tingkat = mine.tingkat AND holder.kode_kecamatan = mine.kode_kecamatan
+  )`;
+
+// The same for one kecamatan, by its range of kelurahan codes.
+const UNPLACED_IN_RANGE = `
+SELECT r.kode_kelurahan AS kode_kelurahan
+FROM kelurahan_dpt r
+WHERE r.kode_kelurahan BETWEEN ? AND ?
+  AND NOT EXISTS (
+    SELECT 1 FROM dapil_kecamatan holder
+    CROSS JOIN kelurahan_suara_partai k
+      ON k.tingkat = holder.tingkat AND k.kode_dapil = holder.kode_dapil AND k.kode_kelurahan = r.kode_kelurahan
+    WHERE holder.tingkat = ? AND holder.kode_kecamatan = ?
+  )`;
+
 const DPT_COLUMNS = [
     'dpt',
     'dpt_l',
@@ -443,10 +476,16 @@ async function assignSplitKecamatan(
                 .bind(...split.range, level, split.band.kode_kecamatan, split.dapil, level, split.dapil),
         ),
     );
+    const unplaced = await db.batch(
+        splits.map((split) => db.prepare(UNPLACED_IN_RANGE).bind(...split.range, level, split.band.kode_kecamatan)),
+    );
     const jobs = splits.map((split, index) => ({
         codes: rows<{ kode_kelurahan: number }>(excluded[index]).map((row) => row.kode_kelurahan),
+        isIncomplete: rows(unplaced[index]).length > 0,
         split,
     }));
+    // A dapil whose shared kecamatan holds voters that belong to no dapil has no roll to report.
+    const incomplete = new Set(jobs.filter((job) => job.isIncomplete).map((job) => job.split.dapil));
     const codes = [...new Set(jobs.flatMap((job) => job.codes))];
     const rolls = new Map<number, VoterRoll>();
 
@@ -484,6 +523,7 @@ async function assignSplitKecamatan(
             addRoll(totals, job.split.dapil, band);
         }
     }
+    return incomplete;
 }
 
 /** Registered voters of each dapil in a province: the total and how many are under 30. */
@@ -545,12 +585,10 @@ export async function readDapilRolls(db: D1Database, tingkat: Tingkat, kodeProvi
         }
     }
 
-    if (splits.length > 0) {
-        await assignSplitKecamatan(db, level, totals, splits);
-    }
+    const incomplete = splits.length > 0 ? await assignSplitKecamatan(db, level, totals, splits) : new Set<number>();
 
     return [...totals]
-        .flatMap(([kode, roll]) => (roll.dpt > 0 ? [asAreaRoll(String(kode), roll)] : []))
+        .flatMap(([kode, roll]) => (roll.dpt > 0 && !incomplete.has(kode) ? [asAreaRoll(String(kode), roll)] : []))
         .sort((left, right) => left.kode.localeCompare(right.kode));
 }
 
@@ -584,25 +622,30 @@ export async function readDapilDpt(db: D1Database, tingkat: Tingkat, kodeDapil: 
         return range === null ? [] : [range];
     });
     if (ranges.length === 0) {
-        return { dapil, bands: [] as DapilDptBand[] };
+        return { dapil, bands: [] as DapilDptBand[], unplaced: { kelurahan: 0, dpt: 0 } };
     }
 
     const results = await db.batch([
         ...chunk(ranges, RANGE_CHUNK).map((group) => rangeSum(db, group)),
         db.prepare(EXCLUDED_KELURAHAN).bind(level, kodeDapil),
+        db.prepare(UNPLACED_KELURAHAN).bind(level, kodeDapil),
     ]);
     const bands = new Map<string, DapilDptBand>();
-    for (const result of results.slice(0, -1)) {
+    for (const result of results.slice(0, -2)) {
         for (const band of rows<DapilDptBand>(result)) {
             bands.set(band.kode_kecamatan, band);
         }
     }
-    const excluded = rows<{ kode_kelurahan: number }>(results.at(-1)).map((row) => row.kode_kelurahan);
+    const elsewhere = rows<{ kode_kelurahan: number }>(results.at(-2)).map((row) => row.kode_kelurahan);
+    const unplaced = rows<{ kode_kelurahan: number; dpt: number }>(results.at(-1));
+    const excluded = [...elsewhere, ...unplaced.map((row) => row.kode_kelurahan)];
     if (excluded.length > 0) {
         await subtractExcluded(db, bands, excluded);
     }
     return {
         dapil,
+        /** Voters of a shared kecamatan that could be given to no dapil. Above zero, the roll is incomplete. */
+        unplaced: { kelurahan: unplaced.length, dpt: unplaced.reduce((sum, row) => sum + row.dpt, 0) },
         bands: [...bands.values()]
             .filter((band) => band.dpt > 0)
             .sort((left, right) => left.kode_kecamatan.localeCompare(right.kode_kecamatan)),
