@@ -385,7 +385,7 @@ describe('padanan and alias', () => {
         expect(psi).toMatchObject({ kursi: 0, lolos_ambang_batas: false, kekurangan_kursi_berikutnya: null });
     });
 
-    it('recommends the smallest swing that wins the next seat after the identified votes', async () => {
+    it('recommends the smallest swing that wins the next seat from the 2024 result', async () => {
         const base = '/v1/2024/dpr_ri/dapil/1101';
         const own = (await json(`${base}?partai=pan`)).body.data;
         const contest = (await json(`${base}/persaingan`)).body.data;
@@ -393,19 +393,20 @@ describe('padanan and alias', () => {
         expect(status).toBe(200);
         expect(body.data).toMatchObject({
             kekurangan_kursi_berikutnya: own.kekurangan_kursi_berikutnya,
-            // The fixtures have no kelurahan, so the supporters are all that is identified.
+            // Supporters are named. They are not entered as votes, and the fixtures have no kelurahan gaps.
             sumber_teridentifikasi: {
                 pendukung: 1000,
                 ruang_suara: null,
                 lintas_tingkat: null,
                 dipakai: null,
-                pemilih_baru: 1000,
+                pemilih_baru: 0,
+                persen_dari_kekurangan: null,
             },
         });
         expect(body.data.riwayat).toMatchObject({ jumlah_dapil: 1, persen_dapil_ini: expect.any(Number) });
-        // Applied the way a caller would, the swing wins the seat, and one step less does not.
+        // Applied the way a caller would, with no new voters, the swing wins the seat, and one step less does not.
         const seatsWith = async (swing: number) => {
-            let gained = 1000;
+            let gained = 0;
             const tried: string[] = [];
             for (const party of contest.partai as { kode_partai: string; suara: number }[]) {
                 if (party.kode_partai !== 'pan') {
@@ -422,9 +423,11 @@ describe('padanan and alias', () => {
         expect(swing).toBeGreaterThan(0);
         expect(await seatsWith(swing)).toBe(own.kursi_partai + 1);
         expect(await seatsWith(Math.round((swing - 0.1) * 10) / 10)).toBe(own.kursi_partai);
-        // Enough supporters alone: no swing is asked for.
+        // A longer supporter list names more people. It does not shorten the swing.
         const enough = await json(`${base}/rekomendasi?partai=pan&pendukung=${own.kekurangan_kursi_berikutnya}`);
-        expect(enough.body.data).toMatchObject({ ayunan_persen: 0, suara_dari_ayunan: 0 });
+        expect(enough.body.data.ayunan_persen).toBe(swing);
+        expect(enough.body.data.sumber_teridentifikasi.pendukung).toBe(own.kekurangan_kursi_berikutnya);
+        expect(enough.body.data.sumber_teridentifikasi.pemilih_baru).toBe(0);
         // A party under the national threshold has no next seat to recommend a way to.
         expect((await json(`${base}/rekomendasi?partai=psi`)).body.data).toBeNull();
         expect((await json('/v1/2019/dpr_ri/dapil/1101/rekomendasi?partai=pan')).body.error.code).toBe(

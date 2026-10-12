@@ -380,9 +380,9 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
         });
     });
 
-    // 28. A scenario for the party's next seat, made of what the data identifies and judged by what the
-    // party has done before: the votes the dapil's own figures point to, the smallest swing from every
-    // other party that closes the rest, and how often the party's votes rose that much between elections.
+    // 28. The distance to the party's next seat: the smallest swing from every other party on the 2024
+    // result, and how often the party's votes rose that much between elections. Supporters are named as
+    // people to contact and are not added as votes, nor are the share gaps.
     app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/rekomendasi', async (c) => {
         const { pemilu, election, db } = await election2024(c, 'Rekomendasi');
         const { tingkat, kode_dapil, partai, pendukung } = parseParams(c, {

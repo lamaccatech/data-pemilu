@@ -151,7 +151,13 @@ export function historyOf(
     };
 }
 
-/** Everything the recommendation is made of, put together. */
+/**
+ * The recommendation, put together. Supporters are people already inclined, so they are named and not
+ * entered as votes: a published contact effect is a few points of turnout among people reached, and that
+ * rate is not applied here. The two share gaps are returned for the cards that already show them, and not
+ * added either: nothing published estimates the votes gained by closing them. The swing is the distance on
+ * the 2024 quotients, with no new voters.
+ */
 export function recommend(input: {
     votes: VotesByParty;
     eligible: ReadonlySet<number> | null;
@@ -164,11 +170,7 @@ export function recommend(input: {
     history: History;
 }) {
     const own = input.votes.get(input.partyId) ?? 0;
-    // Both measure where the party is under its own showing in the same dapil, so they overlap: the larger
-    // one is taken, not their sum.
-    const internal = Math.max(input.voteRoom ?? 0, input.levelGap ?? 0);
-    const newVoters = input.supporters + internal;
-    const swing = minimalSwing(input.votes, input.eligible, input.seats, input.partyId, newVoters);
+    const swing = minimalSwing(input.votes, input.eligible, input.seats, input.partyId, 0);
     const fromSwing =
         swing === null ? null : (swungVotes(input.votes, input.partyId, swing, 0).get(input.partyId) ?? own) - own;
     return {
@@ -178,17 +180,12 @@ export function recommend(input: {
             pendukung: input.supporters,
             ruang_suara: input.voteRoom,
             lintas_tingkat: input.levelGap,
-            /** Which of the two the scenario uses: the larger. Null when neither is known. */
-            dipakai:
-                internal === 0
-                    ? null
-                    : (input.voteRoom ?? 0) >= (input.levelGap ?? 0)
-                      ? 'ruang_suara'
-                      : 'lintas_tingkat',
-            pemilih_baru: newVoters,
-            persen_dari_kekurangan: input.shortfall > 0 ? round2((newVoters / input.shortfall) * 100) : null,
+            /** Neither gap is taken as votes. */
+            dipakai: null,
+            pemilih_baru: 0,
+            persen_dari_kekurangan: null,
         },
-        /** The swing that closes the rest. Zero when the identified sources suffice; null when none does. */
+        /** The smallest swing that wins the next seat from the 2024 result. Null when none does. */
         ayunan_persen: swing,
         suara_dari_ayunan: fromSwing,
         riwayat: input.history,
