@@ -90,6 +90,37 @@ describe('GET /v1/2024/:tingkat/batas/dapil', () => {
     });
 });
 
+describe('GET /v1/2024/batas/kabupaten', () => {
+    it('returns the kabupaten outlines of one province', async () => {
+        const stored = {
+            type: 'FeatureCollection',
+            features: [
+                {
+                    ...collection.features[0],
+                    properties: {
+                        kode_kabupaten: '1101',
+                        nama_kabupaten: 'KABUPATEN ACEH SELATAN',
+                        kode_provinsi: '11',
+                    },
+                },
+            ],
+        };
+        await env.GEO.put('2024/kabupaten/11.geojson', JSON.stringify(stored));
+        const { status, body } = await json('/v1/2024/batas/kabupaten?provinsi=11');
+        expect(status).toBe(200);
+        expect(body.data).toEqual(stored);
+        expect(body.meta).toEqual({ pemilu: '2024', wilayah: 'kabupaten', provinsi: '11' });
+    });
+
+    it('needs a province, has no 2019 outlines, and says so when a province has none', async () => {
+        expect((await json('/v1/2024/batas/kabupaten')).body.error.code).toBe('parameter-tidak-valid');
+        expect((await json('/v1/2019/batas/kabupaten?provinsi=11')).body.error.code).toBe('tidak-tersedia');
+        const unknown = await json('/v1/2024/batas/kabupaten?provinsi=99');
+        expect(unknown.status).toBe(404);
+        expect(unknown.body.error.code).toBe('batas-tidak-ditemukan');
+    });
+});
+
 describe('GET /v1/2024/batas/kecamatan', () => {
     it('returns the kecamatan shapes of one kabupaten', async () => {
         const stored = {

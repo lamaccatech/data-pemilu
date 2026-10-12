@@ -20,6 +20,24 @@ export function registerBatasRoutes(app: Hono<AppEnv>): void {
         });
     });
 
+    // Kabupaten outlines of one province, for drawing the inside of a province. 2024 only.
+    app.get('/v1/:pemilu/batas/kabupaten', async (c) => {
+        const { pemilu } = await election2024(c, 'Batas kabupaten');
+        const { provinsi } = parseParams(c, { provinsi: fields.provinsi });
+        const object = await c.env.GEO.get(`${pemilu}/kabupaten/${provinsi}.geojson`);
+        if (object === null) {
+            throw notFound(
+                'batas-tidak-ditemukan',
+                `Batas kabupaten untuk provinsi ${provinsi} tidak tersedia pada Pemilu ${pemilu}.`,
+            );
+        }
+        const meta = JSON.stringify({ pemilu, wilayah: 'kabupaten', provinsi: String(provinsi) });
+        return c.body(`{"data":${await object.text()},"meta":${meta}}`, 200, {
+            'Content-Type': 'application/json',
+            'Cache-Control': CACHE_CONTROL,
+        });
+    });
+
     // Kecamatan shapes of one kabupaten, for drawing the inside of a dapil. 2024 only.
     app.get('/v1/:pemilu/batas/kecamatan', async (c) => {
         const { pemilu } = await election2024(c, 'Batas kecamatan');
