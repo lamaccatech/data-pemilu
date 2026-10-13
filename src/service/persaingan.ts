@@ -5,7 +5,9 @@ import {
     normalizePersonName,
     rankQuotients,
     round2,
+    type Volatility,
     type VotesByParty,
+    volatility,
     votesNeededForSeats,
 } from '../calc';
 import type { DapilRecord } from '../db/dapil';
@@ -108,6 +110,11 @@ export interface Competition {
     };
     /** The party that needs the fewest extra votes for one more seat: the cheapest seat to take. */
     penantang_terdekat: { kode_partai: string; kekurangan: number } | null;
+    /**
+     * How far the parties' vote shares moved since the comparable dapil of the election before. Null when
+     * there is none.
+     */
+    ayunan_2019: Volatility | null;
 }
 
 const percent = (part: number, whole: number) => (whole > 0 ? round2((part / whole) * 100) : 0);
@@ -331,5 +338,12 @@ export function viewCompetition(
             tabel,
         },
         penantang_terdekat: nearest,
+        ayunan_2019:
+            earlier === null
+                ? null
+                : volatility(
+                      new Map([...earlier.partai].map(([kodePartai, before]) => [kodePartai, before.suara])),
+                      new Map(contenders.map((contender) => [contender.kode_partai, contender.suara])),
+                  ),
     };
 }

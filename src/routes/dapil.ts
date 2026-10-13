@@ -430,6 +430,7 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
             partai: competition?.partai ?? [],
             pembagian_kursi: competition?.pembagian_kursi ?? null,
             penantang_terdekat: competition?.penantang_terdekat ?? null,
+            ayunan_2019: competition?.ayunan_2019 ?? null,
         };
         return ok(c, data, { pemilu, tingkat, jumlah_partai: data.partai.length });
     });

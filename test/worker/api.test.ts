@@ -533,6 +533,27 @@ describe('persaingan', () => {
         expect(body.data.penantang_terdekat.kekurangan).toBe(Math.min(...shortfalls));
     });
 
+    it('measures how far the vote shares moved since the comparable 2019 dapil', async () => {
+        const { body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');
+        const swing = body.data.ayunan_2019;
+        const changes = swing.perubahan as { kode_partai: string; persen_sesudah: number; selisih_poin: number }[];
+        // Half of all the movement, and gains equal losses up to rounding.
+        const moved = changes.reduce((sum, row) => sum + Math.abs(row.selisih_poin), 0);
+        expect(swing.indeks).toBeCloseTo(moved / 2, 1);
+        expect(changes.reduce((sum, row) => sum + row.selisih_poin, 0)).toBeCloseTo(0, 0);
+        expect(changes.map((row) => row.selisih_poin)).toEqual(
+            [...changes.map((row) => row.selisih_poin)].sort((a, b) => b - a),
+        );
+        // The shares are the ones the contest already reports.
+        for (const party of body.data.partai as { kode_partai: string; persen_suara: number }[]) {
+            expect(changes.find((row) => row.kode_partai === party.kode_partai)?.persen_sesudah).toBe(
+                party.persen_suara,
+            );
+        }
+        // Nothing to compare a 2019 dapil with.
+        expect((await json('/v1/2019/dpr_ri/dapil/1101/persaingan')).body.data.ayunan_2019).toBeNull();
+    });
+
     it('sets the 2019 result of the same party beside it when the dapil is comparable', async () => {
         const before = fixture(2019, 'dpr_ri');
         const { body } = await json('/v1/2024/dpr_ri/dapil/1101/persaingan');

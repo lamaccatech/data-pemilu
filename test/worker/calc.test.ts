@@ -10,6 +10,7 @@ import {
     isNextSeatNear,
     normalizePersonName,
     round2,
+    volatility,
     votesNeededForSeats,
 } from '../../src/calc';
 
@@ -221,5 +222,44 @@ describe('round2', () => {
         expect(round2(0.375)).toBe(0.38);
         expect(round2(1.005)).toBe(1);
         expect(round2(2)).toBe(2);
+    });
+});
+
+describe('volatility', () => {
+    it('is half the sum of the changes in share, with a party of one election counted from zero', () => {
+        // Shares then: 50, 30, 20. Shares now: 40, 30, 0, and 30 for a party that is new.
+        const before = new Map([
+            ['a', 500],
+            ['b', 300],
+            ['c', 200],
+        ]);
+        const after = new Map([
+            ['a', 800],
+            ['b', 600],
+            ['d', 600],
+        ]);
+        expect(volatility(before, after)).toEqual({
+            indeks: 30,
+            perubahan: [
+                { kode_partai: 'd', persen_sebelum: 0, persen_sesudah: 30, selisih_poin: 30 },
+                { kode_partai: 'b', persen_sebelum: 30, persen_sesudah: 30, selisih_poin: 0 },
+                { kode_partai: 'a', persen_sebelum: 50, persen_sesudah: 40, selisih_poin: -10 },
+                { kode_partai: 'c', persen_sebelum: 20, persen_sesudah: 0, selisih_poin: -20 },
+            ],
+        });
+    });
+
+    it('is zero when every share is kept, whatever the turnout, and null without votes', () => {
+        const before = new Map([
+            ['a', 100],
+            ['b', 300],
+        ]);
+        const doubled = new Map([
+            ['a', 200],
+            ['b', 600],
+        ]);
+        expect(volatility(before, doubled)?.indeks).toBe(0);
+        expect(volatility(before, new Map())).toBeNull();
+        expect(volatility(new Map([['a', 0]]), doubled)).toBeNull();
     });
 });
