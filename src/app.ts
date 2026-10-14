@@ -6,6 +6,7 @@ import type { AppEnv } from './http/context';
 import { registerBatasRoutes } from './routes/batas';
 import { registerDapilRoutes } from './routes/dapil';
 import { registerDptRoutes } from './routes/dpt';
+import { registerPilpresRoutes } from './routes/pilpres';
 import { registerWilayahRoutes } from './routes/wilayah';
 
 export const app = new Hono<AppEnv>();
@@ -16,6 +17,7 @@ app.use('/v1/*', authenticate, cacheResponses);
 registerBatasRoutes(app);
 registerDapilRoutes(app);
 registerDptRoutes(app);
+registerPilpresRoutes(app);
 registerWilayahRoutes(app);
 
 app.notFound((c) => c.json({ error: { code: 'tidak-ditemukan', message: 'Alamat tidak ditemukan.' } }, 404));
