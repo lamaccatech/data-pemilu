@@ -11,7 +11,7 @@
         "format": "biome check --write",
         "typecheck": "tsc --noEmit",
         "build-sql": "tsx scripts/build-sql.ts",
-        "build-geo": "tsx scripts/build-geo.ts && tsx scripts/build-dapil-geo.ts && tsx scripts/build-kecamatan-geo.ts && tsx scripts/build-kabupaten-geo.ts",
+        "build-geo": "tsx scripts/build-geo.ts && tsx scripts/build-dapil-geo.ts && tsx scripts/build-kecamatan-geo.ts && tsx scripts/build-kelurahan-geo.ts && tsx scripts/build-kabupaten-geo.ts",
         "build-kecamatan-dpr": "python3 scripts/build-kecamatan-dpr.py",
         "build-pilpres": "python3 scripts/build-pilpres.py",
         "load-local": "tsx scripts/load-local.ts",
