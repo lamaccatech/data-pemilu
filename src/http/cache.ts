@@ -6,7 +6,7 @@ import { CALLER_VERSION_PARAMETER } from './params';
  * Part of every cache key. Raise it whenever the shape or the figures of an answer change, so that answers
  * cached before the change are no longer given out.
  */
-const RESPONSE_VERSION = '15';
+const RESPONSE_VERSION = '16';
 const VERSION_PARAMETER = CALLER_VERSION_PARAMETER;
 
 /**

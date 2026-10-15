@@ -333,7 +333,9 @@ export function registerDapilRoutes(app: Hono<AppEnv>): void {
                 // False when no 2019 dapil is comparable, so an empty `pemilu_2019` there says nothing.
                 padanan_2019_tersedia: before !== null,
                 // Whether candidate votes below dapil level can be trusted here. Null for 2019, which has none.
-                sebaran_wilayah: areaTotals === null ? null : checkSpread(tingkat, candidates, areaTotals),
+                sebaran_wilayah: areaTotals === null ? null : checkSpread(tingkat, candidates, areaTotals.totals),
+                // Which counts the check and `/caleg/.../wilayah` read: kelurahan, kecamatan, or both (dpr_ri only).
+                sumber_wilayah: areaTotals?.source ?? null,
             },
         );
     });

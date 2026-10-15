@@ -157,3 +157,72 @@ export function withheldKecamatan(
     );
     return new Set(kecamatan.filter((row) => failing.has(row.kode_dapil)).map((row) => row.kode_kecamatan));
 }
+
+/** One count of an area: a kecamatan for the kecamatan sources, a kelurahan summed up to its kecamatan otherwise. */
+export interface AreaVote {
+    kode: number;
+    partai_id: number;
+    nomor_urut: number;
+    suara: number;
+}
+
+/**
+ * Where a dapil's candidate votes below dapil level come from. The kelurahan tables of some dapil hold a
+ * fraction of the votes and the kecamatan counts hold more, or the other way round, or one of them repeats
+ * votes; so the kelurahan and kecamatan counts are tried together (the larger of the two for each candidate in
+ * each kecamatan), then each alone, and the first that passes `checkSpread` is used.
+ */
+export type AreaSource = 'gabungan' | 'kelurahan' | 'kecamatan';
+
+export interface ChosenAreas {
+    source: AreaSource;
+    votes: AreaVote[];
+}
+
+const areaKey = (row: AreaVote) => `${row.kode}:${row.partai_id}:${row.nomor_urut}`;
+
+function larger(first: readonly AreaVote[], second: readonly AreaVote[]): AreaVote[] {
+    const merged = new Map(first.map((row) => [areaKey(row), row]));
+    for (const row of second) {
+        const known = merged.get(areaKey(row));
+        if (known === undefined || known.suara < row.suara) {
+            merged.set(areaKey(row), row);
+        }
+    }
+    return [...merged.values()];
+}
+
+export const candidateTotalsOf = (votes: readonly AreaVote[]): CandidateTotal[] => {
+    const totals = new Map<string, CandidateTotal>();
+    for (const row of votes) {
+        const key = `${row.partai_id}:${row.nomor_urut}`;
+        const known = totals.get(key);
+        if (known === undefined) {
+            totals.set(key, { partai_id: row.partai_id, nomor_urut: row.nomor_urut, suara: row.suara });
+        } else {
+            known.suara += row.suara;
+        }
+    }
+    return [...totals.values()];
+};
+
+export function chooseAreas(
+    tingkat: Tingkat,
+    candidates: readonly CandidateTotal[],
+    kelurahan: readonly AreaVote[],
+    kecamatan: readonly AreaVote[],
+): ChosenAreas {
+    if (kecamatan.length === 0) {
+        return { source: 'kelurahan', votes: [...kelurahan] };
+    }
+    const options: ChosenAreas[] = [
+        { source: 'gabungan', votes: larger(kelurahan, kecamatan) },
+        { source: 'kelurahan', votes: [...kelurahan] },
+        { source: 'kecamatan', votes: [...kecamatan] },
+    ];
+    const passing = options.find(
+        (option) => checkSpread(tingkat, candidates, candidateTotalsOf(option.votes)).status === 'sesuai',
+    );
+    // None passes: the kelurahan counts stay, flagged as they were before the kecamatan counts were read.
+    return passing ?? { source: 'kelurahan', votes: [...kelurahan] };
+}

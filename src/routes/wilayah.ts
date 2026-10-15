@@ -581,7 +581,11 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             0;
         // A dapil can pass while one candidate in it carries repeated votes, so the candidate is held to the
         // same tolerance.
-        const shown = check.status === 'sesuai' && recorded <= toleratedVotes(candidate.suara);
+        // Below a kecamatan only kelurahan counts exist, so where the kecamatan counts alone passed there is nothing.
+        const shown =
+            check.status === 'sesuai' &&
+            recorded <= toleratedVotes(candidate.suara) &&
+            !(inside !== null && found.sumber === 'kecamatan');
         const partyCheck = checkPartySpread(found.dapilPartyVotes, found.dapilPartyAreas);
         const own = new Map(found.candidateVotes.map((row) => [row.kode, row]));
         // Party votes the source repeats are left out; the candidate's own are judged by their own check.
@@ -634,6 +638,8 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             nama_kecamatan: inside?.nama_kecamatan ?? null,
             sebaran_wilayah: check,
             sebaran_partai: partyCheck,
+            // Which counts `wilayah` is read from: kelurahan, kecamatan, or the larger of both for each (dpr_ri).
+            sumber_wilayah: found.sumber,
         });
     });
 }
