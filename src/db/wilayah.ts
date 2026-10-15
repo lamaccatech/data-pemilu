@@ -1076,3 +1076,50 @@ export async function readCandidateAreas(
         dapilPartyAreas: rows<PartyTotalRecord>(wholePartyAreas),
     };
 }
+
+export interface KabupatenVotesRecord {
+    kode_kabupaten: string;
+    nama_kabupaten: string;
+    /** The candidate's votes there; zero where the candidate has no row. */
+    suara: number;
+    /** The candidate's party's votes there. */
+    suara_partai: number;
+}
+
+/**
+ * One candidate's votes in every kabupaten of the dapil, beside the candidate's party. dpr_ri and dprd_provinsi
+ * only. Unlike the kelurahan counts, these add up to the dapil totals, so there is no check to hold them to.
+ */
+export async function readCandidateKabupaten(
+    db: D1Database,
+    tingkat: Tingkat,
+    kodeDapil: number,
+    { partyId, nomorUrut }: CandidateIdentity,
+) {
+    const level = TINGKAT[tingkat];
+    const [dapil, candidate, votes] = await db.batch([
+        db.prepare(DAPIL).bind(level, kodeDapil),
+        db
+            .prepare(
+                'SELECT partai_id, nomor_urut, nama, jenis_kelamin, suara, kursi_ke FROM caleg WHERE tingkat = ? AND kode_dapil = ? AND partai_id = ? AND nomor_urut = ?',
+            )
+            .bind(level, kodeDapil, partyId, nomorUrut),
+        db
+            .prepare(
+                `SELECT p.kode_kabupaten AS kode_kabupaten, p.nama_kabupaten AS nama_kabupaten,
+                        COALESCE((SELECT c.suara FROM kabupaten_suara_caleg c
+                                  WHERE c.tingkat = p.tingkat AND c.kode_dapil = p.kode_dapil
+                                    AND c.kode_kabupaten = p.kode_kabupaten AND c.partai_id = p.partai_id AND c.nomor_urut = ?), 0) AS suara,
+                        p.suara AS suara_partai
+                 FROM kabupaten_suara_partai p
+                 WHERE p.tingkat = ? AND p.kode_dapil = ? AND p.partai_id = ?
+                 ORDER BY p.kode_kabupaten`,
+            )
+            .bind(nomorUrut, level, kodeDapil, partyId),
+    ]);
+    return {
+        dapil: rows<DapilName>(dapil)[0] ?? null,
+        candidate: rows<ListedCandidate>(candidate)[0] ?? null,
+        kabupaten: rows<KabupatenVotesRecord>(votes),
+    };
+}

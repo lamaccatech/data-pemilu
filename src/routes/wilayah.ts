@@ -6,6 +6,7 @@ import {
     type AreaCandidateRecord,
     type CandidateAreaRecord,
     readCandidateAreas,
+    readCandidateKabupaten,
     readDapilDpt,
     readKecamatanAcrossLevels,
     readKecamatanCandidates,
@@ -535,6 +536,71 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
             partai: partai ?? null,
             jumlah_caleg: data.caleg.length,
         });
+    });
+
+    // 23a. Where one candidate's votes come from, by kabupaten: the level the source counts whole. dpr_ri and
+    // dprd_provinsi, 2024 only. The areas add up to the candidate's dapil votes.
+    app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/caleg/:partai/:nomor_urut/kabupaten', async (c) => {
+        const { pemilu, election, db } = await election2024(c, ONLY_2024);
+        const { tingkat, kode_dapil, partai, nomor_urut } = parseParams(c, {
+            tingkat: fields.tingkat,
+            kode_dapil: fields.kode_dapil,
+            partai: fields.partai,
+            nomor_urut: fields.nomor_urut,
+        });
+        if (tingkat === 'dprd_kabupaten_kota') {
+            throw notFound('tidak-tersedia', 'Dapil DPRD kabupaten/kota ada di dalam satu kabupaten/kota.');
+        }
+        const party = requireParty(election, partai);
+        const found = await readCandidateKabupaten(db, tingkat, kode_dapil, {
+            partyId: party.partai_id,
+            nomorUrut: nomor_urut,
+        });
+        if (found.dapil === null) {
+            throw dapilNotFound(tingkat, kode_dapil, pemilu);
+        }
+        if (found.candidate === null) {
+            throw notFound(
+                'caleg-tidak-ditemukan',
+                `Caleg ${partai} nomor urut ${nomor_urut} tidak ada di dapil ${kode_dapil}.`,
+            );
+        }
+        const recorded = found.kabupaten.reduce((sum, row) => sum + row.suara, 0);
+        const wilayah = found.kabupaten.map((row) => ({
+            kode_kabupaten: row.kode_kabupaten,
+            nama_kabupaten: row.nama_kabupaten,
+            suara: row.suara,
+            suara_partai: row.suara_partai,
+            persen_dari_partai: row.suara_partai > 0 ? round2((row.suara / row.suara_partai) * 100) : null,
+            persen_dari_caleg:
+                found.candidate !== null && found.candidate.suara > 0
+                    ? round2((row.suara / found.candidate.suara) * 100)
+                    : null,
+        }));
+        return ok(
+            c,
+            {
+                caleg: {
+                    kode_partai: partai,
+                    nomor_urut: found.candidate.nomor_urut,
+                    nama: found.candidate.nama,
+                    jenis_kelamin: found.candidate.jenis_kelamin,
+                    suara: found.candidate.suara,
+                    kursi_ke: found.candidate.kursi_ke,
+                },
+                // Summed over the kabupaten, to set beside `caleg.suara`. Null where the dapil has no such rows.
+                suara_tercatat: found.kabupaten.length === 0 ? null : recorded,
+                wilayah: found.kabupaten.length === 0 ? null : wilayah,
+            },
+            {
+                pemilu,
+                tingkat,
+                kode_dapil: String(found.dapil.kode_dapil),
+                nama_dapil: found.dapil.nama_dapil,
+                tingkat_wilayah: 'kabupaten',
+                jumlah_kabupaten: found.kabupaten.length,
+            },
+        );
     });
 
     // 23. Where one candidate's votes come from: every kecamatan of the dapil, or the kelurahan of one
