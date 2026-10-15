@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { z } from 'zod';
 import { round2 } from '../calc';
 import { readDapil, readPadananList, readPartyVotesOfLevel } from '../db/dapil';
 import { type Election, eligibleParties, loadElection, partyCode, requireParty } from '../db/election';
@@ -8,6 +9,8 @@ import {
     readCandidateAreas,
     readCandidateKabupaten,
     readDapilDpt,
+    readDapilKabupaten,
+    readDapilKecamatanCandidates,
     readKecamatanAcrossLevels,
     readKecamatanCandidates,
     readKecamatanVotes,
@@ -599,6 +602,115 @@ export function registerWilayahRoutes(app: Hono<AppEnv>): void {
                 nama_dapil: found.dapil.nama_dapil,
                 tingkat_wilayah: 'kabupaten',
                 jumlah_kabupaten: found.kabupaten.length,
+            },
+        );
+    });
+
+    // 23b. Every candidate's votes per area of a dapil in one answer: what 23 and 23a give for one candidate,
+    // for all of them. By kabupaten (dpr_ri and dprd_provinsi) the rekap, which adds up to the dapil; by kecamatan
+    // the counts 23 would choose for each candidate, withheld on the same check. 2024 only.
+    app.get('/v1/:pemilu/:tingkat/dapil/:kode_dapil/caleg-wilayah', async (c) => {
+        const { pemilu, election, db } = await election2024(c, ONLY_2024);
+        const { tingkat, kode_dapil, tingkat_wilayah } = parseParams(c, {
+            tingkat: fields.tingkat,
+            kode_dapil: fields.kode_dapil,
+            tingkat_wilayah: z.enum(['kabupaten', 'kecamatan']).default('kecamatan'),
+        });
+        const kodePartai = (partaiId: number) => partyCode(election, partaiId);
+        if (tingkat_wilayah === 'kabupaten') {
+            if (tingkat === 'dprd_kabupaten_kota') {
+                throw notFound('tidak-tersedia', 'Dapil DPRD kabupaten/kota ada di dalam satu kabupaten/kota.');
+            }
+            const found = await readDapilKabupaten(db, tingkat, kode_dapil);
+            if (found.dapil === null) {
+                throw dapilNotFound(tingkat, kode_dapil, pemilu);
+            }
+            const byKabupaten = new Map<string, { nama: string; partai: unknown[]; caleg: unknown[] }>();
+            for (const row of found.parties) {
+                const entry = byKabupaten.get(row.kode_kabupaten) ?? {
+                    nama: row.nama_kabupaten,
+                    partai: [],
+                    caleg: [],
+                };
+                entry.partai.push({ kode_partai: kodePartai(row.partai_id), suara: row.suara });
+                byKabupaten.set(row.kode_kabupaten, entry);
+            }
+            let recorded = 0;
+            for (const row of found.candidates) {
+                recorded += row.suara;
+                byKabupaten.get(row.kode_kabupaten)?.caleg.push({
+                    kode_partai: kodePartai(row.partai_id),
+                    nomor_urut: row.nomor_urut,
+                    suara: row.suara,
+                });
+            }
+            const wilayah = [...byKabupaten].map(([kode, entry]) => ({
+                kode_kabupaten: kode,
+                nama_kabupaten: entry.nama,
+                partai: entry.partai,
+                caleg: entry.caleg,
+            }));
+            return ok(
+                c,
+                {
+                    suara_tercatat: found.candidates.length === 0 ? null : recorded,
+                    wilayah: wilayah.length === 0 ? null : wilayah,
+                },
+                {
+                    pemilu,
+                    tingkat,
+                    kode_dapil: String(found.dapil.kode_dapil),
+                    nama_dapil: found.dapil.nama_dapil,
+                    tingkat_wilayah: 'kabupaten',
+                    jumlah_kabupaten: wilayah.length,
+                },
+            );
+        }
+        const found = await readDapilKecamatanCandidates(db, tingkat, kode_dapil);
+        if (found.dapil === null) {
+            throw dapilNotFound(tingkat, kode_dapil, pemilu);
+        }
+        const check = checkSpread(tingkat, found.candidates, found.areaTotals);
+        const listed = new Map(found.candidates.map((row) => [`${row.partai_id}:${row.nomor_urut}`, row.suara]));
+        // The same tolerance 23 holds a single candidate to. A candidate who carries repeated votes is left out
+        // of the answer, as 23 leaves out that candidate's areas; the others stay.
+        const recordedOf = new Map(found.areaTotals.map((row) => [`${row.partai_id}:${row.nomor_urut}`, row.suara]));
+        const isSound = check.status === 'sesuai';
+        const isRepeated = (partaiId: number, nomorUrut: number) => {
+            const key = `${partaiId}:${nomorUrut}`;
+
+            return (recordedOf.get(key) ?? 0) > toleratedVotes(listed.get(key) ?? 0);
+        };
+        const byKecamatan = new Map<number, { kode_partai: string; nomor_urut: number; suara: number }[]>();
+        for (const row of found.votes) {
+            if (row.suara <= 0 || isRepeated(row.partai_id, row.nomor_urut)) {
+                continue;
+            }
+            const list = byKecamatan.get(row.kode) ?? [];
+            list.push({ kode_partai: kodePartai(row.partai_id), nomor_urut: row.nomor_urut, suara: row.suara });
+            byKecamatan.set(row.kode, list);
+        }
+        const wilayah = found.kecamatan.map((row) => ({
+            kode_kecamatan: row.kode_kecamatan,
+            nama_kecamatan: row.nama_kecamatan,
+            caleg: byKecamatan.get(Number(row.kode_kecamatan)) ?? [],
+        }));
+        const recorded = found.areaTotals.reduce((sum, row) => sum + row.suara, 0);
+        return ok(
+            c,
+            {
+                suara_tercatat: check.status === 'tidak_tersedia' ? null : recorded,
+                wilayah: isSound ? wilayah : null,
+            },
+            {
+                pemilu,
+                tingkat,
+                kode_dapil: String(found.dapil.kode_dapil),
+                nama_dapil: found.dapil.nama_dapil,
+                tingkat_wilayah: 'kecamatan',
+                jumlah_kecamatan: wilayah.length,
+                sebaran_wilayah: check,
+                sumber_wilayah: found.sumber,
             },
         );
     });

@@ -1123,3 +1123,104 @@ export async function readCandidateKabupaten(
         kabupaten: rows<KabupatenVotesRecord>(votes),
     };
 }
+
+export interface DapilKabupatenRecord {
+    kode_kabupaten: string;
+    nama_kabupaten: string;
+    partai_id: number;
+    suara: number;
+}
+
+export interface DapilKabupatenCandidateRecord {
+    kode_kabupaten: string;
+    partai_id: number;
+    nomor_urut: number;
+    suara: number;
+}
+
+/**
+ * Every party's and every candidate's votes in every kabupaten of a dapil, in one read: what the per-candidate
+ * kabupaten endpoint gives for one candidate, for all of them. dpr_ri and dprd_provinsi only.
+ */
+export async function readDapilKabupaten(db: D1Database, tingkat: Tingkat, kodeDapil: number) {
+    const level = TINGKAT[tingkat];
+    const [dapil, parties, candidates] = await db.batch([
+        db.prepare(DAPIL).bind(level, kodeDapil),
+        db
+            .prepare(
+                'SELECT kode_kabupaten, nama_kabupaten, partai_id, suara FROM kabupaten_suara_partai WHERE tingkat = ? AND kode_dapil = ? ORDER BY kode_kabupaten, partai_id',
+            )
+            .bind(level, kodeDapil),
+        db
+            .prepare(
+                'SELECT kode_kabupaten, partai_id, nomor_urut, suara FROM kabupaten_suara_caleg WHERE tingkat = ? AND kode_dapil = ? AND suara > 0 ORDER BY kode_kabupaten, partai_id, nomor_urut',
+            )
+            .bind(level, kodeDapil),
+    ]);
+    return {
+        dapil: rows<DapilName>(dapil)[0] ?? null,
+        parties: rows<DapilKabupatenRecord>(parties),
+        candidates: rows<DapilKabupatenCandidateRecord>(candidates),
+    };
+}
+
+/** Every candidate's votes in each area of a dapil, from the one table its level has. dprd_provinsi and dprd_kabupaten_kota. */
+function allCandidateAreas(db: D1Database, tingkat: Tingkat, kodeDapil: number): D1PreparedStatement {
+    if (tingkat === 'dprd_provinsi') {
+        return db
+            .prepare(
+                'SELECT kode_kecamatan AS kode, partai_id, nomor_urut, suara FROM kecamatan_suara_caleg WHERE kode_dapil = ?',
+            )
+            .bind(kodeDapil);
+    }
+    return db
+        .prepare(
+            `SELECT kode_kelurahan / ${KELURAHAN_PER_KECAMATAN} AS kode, partai_id, nomor_urut, SUM(suara) AS suara FROM kelurahan_suara_caleg WHERE tingkat = ? AND kode_dapil = ? GROUP BY 1, 2, 3`,
+        )
+        .bind(TINGKAT[tingkat], kodeDapil);
+}
+
+/**
+ * Every candidate's votes in every kecamatan of a dapil, in one read, from the counts the per-candidate
+ * endpoint would choose for each of them (see `chooseAreas`), with every candidate's total over them to
+ * hold against the dapil first.
+ */
+export async function readDapilKecamatanCandidates(db: D1Database, tingkat: Tingkat, kodeDapil: number) {
+    const level = TINGKAT[tingkat];
+    const [dapil, kecamatan, everyone, totals, ...sources] = await db.batch([
+        db.prepare(DAPIL).bind(level, kodeDapil),
+        db
+            .prepare(
+                'SELECT kode_kecamatan, nama_kecamatan FROM dapil_kecamatan WHERE tingkat = ? AND kode_dapil = ? ORDER BY kode_kecamatan',
+            )
+            .bind(level, kodeDapil),
+        db
+            .prepare(
+                'SELECT partai_id, nomor_urut, nama, jenis_kelamin, suara, kursi_ke FROM caleg WHERE tingkat = ? AND kode_dapil = ?',
+            )
+            .bind(level, kodeDapil),
+        candidateAreaTotals(db, tingkat, kodeDapil),
+        ...(tingkat === 'dpr_ri' ? areaSources(db, tingkat, kodeDapil) : [allCandidateAreas(db, tingkat, kodeDapil)]),
+    ]);
+    const listed = rows<ListedCandidate>(everyone);
+    const first = sources[0];
+    if (tingkat === 'dpr_ri' && first !== undefined) {
+        const chosen = chooseSources(tingkat, listed, first);
+        return {
+            dapil: rows<DapilName>(dapil)[0] ?? null,
+            kecamatan: rows<{ kode_kecamatan: string; nama_kecamatan: string }>(kecamatan),
+            candidates: listed,
+            areaTotals: candidateTotalsOf(chosen.votes),
+            votes: chosen.votes,
+            sumber: chosen.source as ChosenAreas['source'] | null,
+        };
+    }
+    return {
+        dapil: rows<DapilName>(dapil)[0] ?? null,
+        kecamatan: rows<{ kode_kecamatan: string; nama_kecamatan: string }>(kecamatan),
+        candidates: listed,
+        areaTotals: rows<CandidateAreaTotal>(totals),
+        votes: first === undefined ? [] : rows<AreaVote>(first),
+        sumber: null as ChosenAreas['source'] | null,
+    };
+}
