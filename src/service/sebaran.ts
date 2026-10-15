@@ -172,7 +172,7 @@ export interface AreaVote {
  * votes; so the kelurahan and kecamatan counts are tried together (the larger of the two for each candidate in
  * each kecamatan), then each alone, and the first that passes `checkSpread` is used.
  */
-export type AreaSource = 'gabungan' | 'kelurahan' | 'kecamatan';
+export type AreaSource = 'gabungan' | 'kelurahan' | 'kecamatan' | 'pelengkap';
 
 export interface ChosenAreas {
     source: AreaSource;
@@ -211,18 +211,24 @@ export function chooseAreas(
     candidates: readonly CandidateTotal[],
     kelurahan: readonly AreaVote[],
     kecamatan: readonly AreaVote[],
+    // The names of the two counts: dprd_provinsi has no kelurahan, its first count is the kecamatan table
+    // and its second the supplementary table.
+    labels: { first: AreaSource; second: AreaSource } = { first: 'kelurahan', second: 'kecamatan' },
 ): ChosenAreas {
     if (kecamatan.length === 0) {
-        return { source: 'kelurahan', votes: [...kelurahan] };
+        return { source: labels.first, votes: [...kelurahan] };
+    }
+    if (kelurahan.length === 0) {
+        return { source: labels.second, votes: [...kecamatan] };
     }
     const options: ChosenAreas[] = [
         { source: 'gabungan', votes: larger(kelurahan, kecamatan) },
-        { source: 'kelurahan', votes: [...kelurahan] },
-        { source: 'kecamatan', votes: [...kecamatan] },
+        { source: labels.first, votes: [...kelurahan] },
+        { source: labels.second, votes: [...kecamatan] },
     ];
     const passing = options.find(
         (option) => checkSpread(tingkat, candidates, candidateTotalsOf(option.votes)).status === 'sesuai',
     );
     // None passes: the kelurahan counts stay, flagged as they were before the kecamatan counts were read.
-    return passing ?? { source: 'kelurahan', votes: [...kelurahan] };
+    return passing ?? { source: labels.first, votes: [...kelurahan] };
 }

@@ -882,6 +882,16 @@ export function candidateAreaTotals(db: D1Database, tingkat: Tingkat, kodeDapil:
  * candidate's and every party's votes per kecamatan. Empty lists at the other levels.
  */
 function areaSources(db: D1Database, tingkat: Tingkat, kodeDapil: number): D1PreparedStatement[] {
+    if (tingkat === 'dprd_provinsi') {
+        // The kecamatan table, then the supplementary one.
+        return [
+            db
+                .prepare(
+                    'SELECT 0 AS sumber, kode_kecamatan AS kode, partai_id, nomor_urut, suara FROM kecamatan_suara_caleg WHERE kode_dapil = ? UNION ALL SELECT 1, kode_kecamatan, partai_id, nomor_urut, suara FROM kecamatan_suara_caleg_pelengkap WHERE kode_dapil = ?',
+                )
+                .bind(kodeDapil, kodeDapil),
+        ];
+    }
     if (tingkat !== 'dpr_ri') {
         return [];
     }
@@ -907,7 +917,8 @@ function chooseSources(
     candidateSources: D1Result<unknown>,
 ): ChosenAreas {
     const own = rows<AreaSourceRow>(candidateSources);
-    return chooseAreas(tingkat, candidates, withoutSource(own, 0), withoutSource(own, 1));
+    const labels = tingkat === 'dprd_provinsi' ? ({ first: 'kecamatan', second: 'pelengkap' } as const) : undefined;
+    return chooseAreas(tingkat, candidates, withoutSource(own, 0), withoutSource(own, 1), labels);
 }
 
 export async function readCandidateAreaTotals(db: D1Database, tingkat: Tingkat, kodeDapil: number) {

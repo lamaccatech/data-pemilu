@@ -14,6 +14,7 @@
         "build-geo": "tsx scripts/build-geo.ts && tsx scripts/build-dapil-geo.ts && tsx scripts/build-kecamatan-geo.ts && tsx scripts/build-kelurahan-geo.ts && tsx scripts/build-kabupaten-geo.ts",
         "build-kecamatan-dpr": "python3 scripts/build-kecamatan-dpr.py",
         "build-kabupaten": "python3 scripts/build-kabupaten.py",
+        "build-kecamatan-pelengkap": "python3 scripts/build-kecamatan-pelengkap.py",
         "build-pilpres": "python3 scripts/build-pilpres.py",
         "load-local": "tsx scripts/load-local.ts",
         "verify": "tsx scripts/verify.ts"
