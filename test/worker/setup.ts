@@ -127,3 +127,6 @@ if (seeded?.n === 0) {
     ]);
 }
 resetElections();
+// KV outlives a run, unlike the Cache API; a stale answer would hide a change in the code under test.
+const { keys: staleKeys } = (await env.CACHE_KV?.list()) ?? { keys: [] };
+await Promise.all(staleKeys.map((entry) => env.CACHE_KV?.delete(entry.name)));

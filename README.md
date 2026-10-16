@@ -8,7 +8,8 @@ different party, so nothing here assumes a particular party: every endpoint take
 - Calculations (Sainte-Laguë seats, targets, `kuadran`, `peluang_dekat`) run in the Worker at request time.
   Nothing derived is stored. `src/calc/` is a port of `reference/reference_calc.py` and must reproduce
   `reference/fixtures.json`.
-- Boundary files sit in one R2 bucket, `data-pemilu-batas` (binding `GEO`).
+- Boundary files sit in one R2 bucket, `data-pemilu-batas` (binding `GEO`). Finished answers are kept in one KV
+  namespace (binding `CACHE_KV`); see "Answer cache (KV)".
 - Election data and boundary files are never committed. Election data is read from
   `~/data/bedah-dapil/export/` (override with `PEMILU_EXPORT_DIR`), and everything downloaded or generated
   goes to `data/`, which git ignores.
@@ -252,7 +253,8 @@ kelurahan level (55 doubled, 221 short).
 
 ## Deployment
 
-Nothing below has been run. The project is built and tested against local D1 only.
+Nothing below has been run against Cloudflare. The project is built and tested against local D1 only; the KV layer was
+exercised against the local worker (DPR RI warmed, 0 failures).
 
 ### What a full load costs
 
@@ -272,15 +274,13 @@ and 500 MB per database when this was written, so the load needs the Workers Pai
 ### Steps
 
 ```sh
-# 1. Create the databases, then put the two database_id values into wrangler.jsonc.
-pnpm exec wrangler d1 create pemilu2024
-pnpm exec wrangler d1 create pemilu2019
+# 1. Infrastructure: finds or creates the two D1 databases, the KV namespace (answer cache) and the R2 bucket,
+#    writes their ids into wrangler.jsonc (commit it), asks for API_KEYS if the secret is missing, applies the
+#    migrations and deploys. Safe to run again. `pnpm cf:check` only validates the ids; `pnpm cf:deploy`
+#    migrates and deploys later releases.
+pnpm cf:setup
 
-# 2. Create the tables.
-pnpm exec wrangler d1 migrations apply pemilu2024 --remote
-pnpm exec wrangler d1 migrations apply pemilu2019 --remote
-
-# 3. Load the data, in file order (16 files for 2024, 4 for 2019). Run `pnpm build-sql` first.
+# 2. Load the data, in file order (16 files for 2024, 4 for 2019). Run `pnpm build-sql` first.
 for file in data/sql/pemilu2019/*.sql; do
     pnpm exec wrangler d1 execute pemilu2019 --remote --yes --file "$file" || break
 done
@@ -288,22 +288,41 @@ for file in data/sql/pemilu2024/*.sql; do
     pnpm exec wrangler d1 execute pemilu2024 --remote --yes --file "$file" || break
 done
 
-# 4. Check the counts against the table above, for example:
+# 3. Check the counts against the table above, for example:
 pnpm exec wrangler d1 execute pemilu2024 --remote --command 'SELECT COUNT(*) FROM kelurahan_suara_caleg'
 
-# 5. Boundary files: 667 objects, about 20 MB (514 of them the kecamatan shapes). Run `pnpm build-geo` first.
-pnpm exec wrangler r2 bucket create data-pemilu-batas
+# 4. Boundary files: 667 objects, about 20 MB (514 of them the kecamatan shapes). Run `pnpm build-geo` first.
 (cd data/geo && find 2024 2019 -name '*.geojson') | while read -r key; do
     pnpm exec wrangler r2 object put "data-pemilu-batas/$key" --remote \
         --file "data/geo/$key" --content-type application/geo+json || break
 done
 
-# 6. API keys: a JSON object mapping key to client label, for example {"<random key>":"pan"}.
-pnpm exec wrangler secret put API_KEYS
-
-# 7. Deploy.
-pnpm exec wrangler deploy
+# 5. Warm the answer cache (below). Run it after every data load and every RESPONSE_VERSION change.
+pnpm prewarm https://pemilu2024.lamaccaservices.com <api key>
 ```
+
+`API_KEYS` is a JSON object mapping key to client label, for example `{"<random key>":"pan"}`.
+
+### Answer cache (KV)
+
+The expensive answers are the same for every candidate of a dapil. The DPR RI ones read the dapil's whole
+`kelurahan_suara_caleg` range: 51,000 rows on average and 149,000 at most, several times per request. So
+finished answers are kept in the KV namespace `data-pemilu-cache` (binding `CACHE_KV`), which every datacenter
+reads. `src/http/cache.ts` asks KV first, then the Cache API (per datacenter, and only on a custom domain),
+then computes, and writes what it computed to both.
+
+- `pnpm prewarm <base url> <api key> [--tingkat dpr_ri]` asks for every dapil-wide answer ahead of time: `/caleg`
+  for each party, `/caleg-wilayah` by kecamatan and by kabupaten, and `/kekuatan` for each party over the country
+  and each province. That is 2,382 answers for DPR RI (2.5 minutes locally), so callers never wait on a scan.
+  Answers for one candidate (`.../caleg/:partai/:nomor_urut/wilayah`) are not warmed: there are hundreds of
+  thousands. They are computed once when first asked, and are best replaced by `caleg-wilayah` in the caller.
+- The KV key is the URL with `__versi` set to `RESPONSE_VERSION`; a caller's own `__versi` does not make a new
+  key. **After a change in the shape or figures of an answer, raise `RESPONSE_VERSION` in `src/http/cache.ts`
+  and run `pnpm prewarm` again.** Raise it after a reload of changed data too: KV has no expiry here, so
+  only a new version stops the old answers being given out.
+- KV caches a read, an absent key too, at the edge for 60 seconds, so an answer written just after a miss can
+  take that long to show in that datacenter.
+- Without the binding the Worker still runs, on the Cache API alone.
 
 If a file fails part-way, run that table's files again from `-0001`, which begins with the `DELETE`.
 

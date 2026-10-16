@@ -5,6 +5,8 @@ export interface Env {
     GEO: R2Bucket;
     /** JSON object mapping API key to a client label, for example {"abc...":"pan"}. */
     API_KEYS: string;
+    /** Finished answers, keyed by URL and response version. Optional: without it only the Cache API is used. */
+    CACHE_KV?: KVNamespace;
 }
 
 declare global {
@@ -17,6 +19,7 @@ declare global {
             DB_2019: D1Database;
             GEO: R2Bucket;
             API_KEYS: string;
+            CACHE_KV?: KVNamespace;
         }
     }
 }

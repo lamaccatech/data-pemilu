@@ -17,6 +17,10 @@
         "build-kecamatan-pelengkap": "python3 scripts/build-kecamatan-pelengkap.py",
         "build-pilpres": "python3 scripts/build-pilpres.py",
         "load-local": "tsx scripts/load-local.ts",
+        "prewarm": "tsx scripts/prewarm.ts",
+        "cf:setup": "tsx scripts/deploy-cloudflare.ts setup",
+        "cf:deploy": "tsx scripts/deploy-cloudflare.ts deploy",
+        "cf:check": "tsx scripts/deploy-cloudflare.ts check",
         "verify": "tsx scripts/verify.ts"
     },
     "dependencies": {

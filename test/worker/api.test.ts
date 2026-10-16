@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fixtures from '../../reference/fixtures.json';
 import { normalizePersonName } from '../../src/calc';
 import { call, json } from './helpers';
@@ -99,6 +99,13 @@ describe('routing and validation', () => {
     });
 });
 
+// The cache key drops the caller's `__versi`, so tests that count misses start from an empty KV.
+async function emptyKv() {
+    for (const entry of (await env.CACHE_KV?.list())?.keys ?? []) {
+        await env.CACHE_KV?.delete(entry.name);
+    }
+}
+
 describe('caching', () => {
     it('serves the second request from the Cache API, and never without a key', async () => {
         const path = '/v1/2024/partai?cache=1';
@@ -106,15 +113,35 @@ describe('caching', () => {
         expect((await call(path)).headers.get('X-Cache')).toBeNull();
         expect((await call(path)).headers.get('Cache-Control')).toBe('no-store');
 
+        await emptyKv();
         const url = '/v1/2019/partai';
         const first = await call(url);
         expect(first.headers.get('X-Cache')).toBe('MISS');
         expect(first.headers.get('Cache-Control')).toBe('private, max-age=86400');
         const body = await first.text();
+        // KV is asked first; with it emptied the answer must come from the Cache API.
+        await vi.waitFor(async () => expect((await env.CACHE_KV?.list())?.keys.length).toBeGreaterThan(0));
+        await emptyKv();
         const second = await call(url);
         expect(second.headers.get('X-Cache')).toBe('HIT');
         expect(second.headers.get('Cache-Control')).toBe('private, max-age=86400');
         expect(await second.text()).toBe(body);
+        expect((await call(url, null)).status).toBe(401);
+    });
+
+    it('keeps answers in KV, and gives them out before the Cache API', async () => {
+        await emptyKv();
+        const url = '/v1/2024/dapil-alias';
+        // Read to the end: the copies kept for later are filled as the answer is read.
+        const firstCall = await call(url);
+        expect(firstCall.status).toBe(200);
+        await firstCall.text();
+        // The write happens after the response is sent; the second call reads the same URL back.
+        await vi.waitFor(async () => expect((await call(url)).headers.get('X-Cache')).toBe('KV'));
+        const stored = await call(url);
+        expect(stored.headers.get('Cache-Control')).toBe('private, max-age=86400');
+        expect(stored.headers.get('Content-Type')).toContain('application/json');
+        expect(((await stored.json()) as { data: unknown[] }).data.length).toBeGreaterThan(0);
         expect((await call(url, null)).status).toBe(401);
     });
 });
