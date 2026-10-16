@@ -224,6 +224,32 @@ Served as they are; fix them in the export, not here.
 - 24 kecamatan are split between two `dprd_kabupaten_kota` dapil. Endpoint 6 names the other dapil in
   `meta.dapil_lain` and leaves out kelurahan that have votes there.
 
+### Which level to trust (2024)
+
+Each level summed straight to its dapil (kecamatan to dapil, not via kabupaten) and held against the dapil
+totals in `caleg` and `suara_partai`. Where several levels exist, prefer kabupaten, then kecamatan, then
+kelurahan. Measured on the loaded data:
+
+| Tingkat | Level | Dapil covered | Sum / total | Dapil within 1% | Candidates exact |
+| --- | --- | --- | --- | --- | --- |
+| `dpr_ri` | kabupaten | 83/84 | 1.000 | 83 | 97% |
+| | kecamatan | 83/84 | 0.944 | 69 | 83% |
+| | kelurahan | 83/84 | 0.948 | 34 | 26% |
+| `dprd_provinsi` | kabupaten | 230/301 | 1.000 | 228 | 99.7% |
+| | kecamatan (both tables merged) | 281/301 | 0.977 | 265 | 94% |
+| | kecamatan (`pelengkap` alone) | 102/301 | 0.291 | 27 | 25% |
+| `dprd_kabupaten_kota` | kelurahan (only level) | 2015/2325 | 0.993 | 1863 | 91% |
+
+Party votes: kabupaten sums to 0.990 (`dpr_ri`) and 0.977 (`dprd_provinsi`) of the dapil votes; kelurahan to
+0.889, 0.897 and 0.962 (`dprd_kabupaten_kota`). For `dprd_provinsi` only 4 of 280 dapil are within 1% at
+kelurahan level (55 doubled, 221 short).
+
+- `pelengkap` is a supplement: it only helps by filling kecamatan the first table lacks (259 to 281 dapil).
+- Kecamatan party votes exist only as kelurahan sums, so they are not an independent level.
+- The dapil totals are taken as the truth; in 4 `dprd_kabupaten_kota` dapil the candidates alone exceed the
+  party votes, so those totals are suspect.
+- Sum / total can hide offsetting errors; judge by dapil within 1% and exact candidates as well.
+
 ## Deployment
 
 Nothing below has been run. The project is built and tested against local D1 only.
