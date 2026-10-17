@@ -9,18 +9,20 @@
         {
             "binding": "DB_2024",
             "database_name": "pemilu2024",
-            "database_id": "00000000-0000-0000-0000-000000002024",
+            "database_id": "4fb7f82e-5b52-4c4c-aea9-e61083193e41",
             "migrations_dir": "migrations/2024"
         },
         {
             "binding": "DB_2019",
             "database_name": "pemilu2019",
-            "database_id": "00000000-0000-0000-0000-000000002019",
+            "database_id": "52d9be05-b0ae-4092-a4da-360e7723a7fc",
             "migrations_dir": "migrations/2019"
         }
     ],
     // Finished answers, filled by `pnpm prewarm`. The placeholder ids here are replaced by `pnpm cf:setup`.
-    "kv_namespaces": [{ "binding": "CACHE_KV", "id": "00000000000000000000000000002024" }],
+    "kv_namespaces": [{ "binding": "CACHE_KV", "id": "fc89d236671c4058a88d2e7a6407b602" }],
     // Boundary files built by `pnpm build-geo`, named <pemilu>/<wilayah>.geojson.
-    "r2_buckets": [{ "binding": "GEO", "bucket_name": "data-pemilu-batas" }]
+    "r2_buckets": [{ "binding": "GEO", "bucket_name": "data-pemilu-batas" }],
+    // Without this a redeploy drops the custom domain. The Cache API only works on a custom domain.
+    "routes": [{ "pattern": "pemilu.lamaccaservices.com", "custom_domain": true }]
 }
