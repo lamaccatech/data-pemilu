@@ -262,9 +262,12 @@ D1 bills rows written, index entries included, and stored size. From `pnpm verif
 
 | Database | Rows | Rows written (with index entries) | Local SQLite size |
 | --- | --- | --- | --- |
-| `pemilu2024` | 11,874,387 | 12,154,429 | 286 MB |
+| `pemilu2024` | 12,767,320 | 12,154,429 | 286 MB |
 | `pemilu2019` | 286,769 | 530,105 | 16 MB |
-| Total | 12,161,156 | 12,684,534 | 302 MB |
+| Total | 13,054,089 | 12,684,534 | 302 MB |
+
+Rows are the counts now loaded in D1. The rows-written and size columns are from the earlier, smaller load and
+run about 7% low for `pemilu2024`; run `pnpm verify` against a freshly built local database to refresh them.
 
 A repeated load writes the same again, plus one row written per row deleted by the leading `DELETE FROM`.
 Check these against the current D1 limits before loading: the free plan allowed 100,000 rows written per day
@@ -291,14 +294,14 @@ done
 # 3. Check the counts against the table above, for example:
 pnpm exec wrangler d1 execute pemilu2024 --remote --command 'SELECT COUNT(*) FROM kelurahan_suara_caleg'
 
-# 4. Boundary files: 667 objects, about 20 MB (514 of them the kecamatan shapes). Run `pnpm build-geo` first.
+# 4. Boundary files: 1,179 objects, about 190 MB (514 of them the kecamatan shapes). Run `pnpm build-geo` first.
 (cd data/geo && find 2024 2019 -name '*.geojson') | while read -r key; do
     pnpm exec wrangler r2 object put "data-pemilu-batas/$key" --remote \
         --file "data/geo/$key" --content-type application/geo+json || break
 done
 
 # 5. Warm the answer cache (below). Run it after every data load and every RESPONSE_VERSION change.
-pnpm prewarm https://pemilu2024.lamaccaservices.com <api key>
+pnpm prewarm https://pemilu.lamaccaservices.com <api key>
 ```
 
 `API_KEYS` is a JSON object mapping key to client label, for example `{"<random key>":"pan"}`.
@@ -331,17 +334,14 @@ about 19,000 values, long before the 100 KB statement limit.
 
 ### Custom domains
 
-Both hostnames point at this one Worker. Add to `wrangler.jsonc` and deploy again:
+The live hostname is `pemilu.lamaccaservices.com`, declared under `routes` in `wrangler.jsonc` so a redeploy keeps it:
 
 ```jsonc
-"routes": [
-    { "pattern": "pemilu2024.lamaccaservices.com", "custom_domain": true },
-    { "pattern": "pemilu2019.lamaccaservices.com", "custom_domain": true }
-]
+"routes": [{ "pattern": "pemilu.lamaccaservices.com", "custom_domain": true }]
 ```
 
-The year in the path always wins, so `https://pemilu2019.lamaccaservices.com/v1/2024/partai` is 2024. The
-Cache API only works on a custom domain; on `*.workers.dev` every request is computed again.
+The year is always taken from the path (`/v1/2024/partai`). The Cache API only works on a custom domain; on
+`*.workers.dev` every request is computed again, and some ISPs block `workers.dev` altogether.
 
 ## Later
 
