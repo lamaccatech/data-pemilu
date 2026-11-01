@@ -1,0 +1,5 @@
+[tools]
+node = "24"
+pnpm = "12.15.0"
+# The kabupaten, kecamatan and pilpres build scripts are Python
+python = "3"

@@ -16,9 +16,10 @@ different party, so nothing here assumes a particular party: every endpoint take
 
 ## Run it locally
 
-Requirements: Node 22 or newer and pnpm.
+Requirements: [mise](https://mise.jdx.dev), which installs the Node, pnpm and Python versions in `mise.toml`.
 
 ```sh
+mise trust && mise install
 pnpm install
 pnpm build-sql      # CSV -> data/sql/<database>/<table>-NNNN.sql, about 50 s
 pnpm build-geo      # province outlines (downloaded once) and 2024 dapil outlines -> data/geo/, about 30 s
